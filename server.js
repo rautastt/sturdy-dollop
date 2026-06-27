@@ -12,6 +12,8 @@ const { apiLimiter } = require('./middleware/rateLimit');
 const attachSocketHandlers = require('./socket/handlers');
 
 const app = express();
+// Trust Render's load balancer (first proxy) so express-rate-limit accepts X-Forwarded-For
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: true, methods: ['GET','POST'], credentials: true },
