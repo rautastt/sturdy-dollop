@@ -36,15 +36,23 @@ const sessionMiddleware = session({
 
 io.use((socket, next) => sessionMiddleware(socket.request, socket.request.res || {}, next));
 
+// Content Security Policy: allow cdnjs for socket.io client and (temporary) inline event handlers
+// SECURITY: Allowing 'unsafe-inline' for script attributes weakens CSP. This is a temporary compatibility fix
+// to avoid breaking behavior from inline onclick/oninput handlers in public/app.html. Recommend refactoring
+// inline handlers into external scripts or using nonces, then removing scriptSrcAttr 'unsafe-inline'.
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", 'cdnjs.cloudflare.com'],
+      // Allow script from self and cdnjs (socket.io client)
+      scriptSrc: ["'self'", 'https://cdnjs.cloudflare.com'],
+      // Temp: allow inline event handler attributes (onclick/oninput). Remove after refactor.
+      scriptSrcAttr: ["'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'", 'fonts.googleapis.com'],
       fontSrc: ["'self'", 'fonts.gstatic.com'],
       imgSrc: ["'self'", 'data:', 'blob:'],
-      connectSrc: ["'self'", 'ws:', 'wss:'],
+      // Allow websocket endpoints and cdn for source maps
+      connectSrc: ["'self'", 'ws:', 'wss:', 'https://cdnjs.cloudflare.com'],
     },
   },
 }));
