@@ -12,25 +12,25 @@
 <!-- Sidebar -->
 <div id="sidebar">
   <div id="serverList">
-    <div class="server-icon active" id="homeBtn" title="Home" onclick="showHome()">⚡</div>
+    <div class="server-icon active" id="homeBtn" title="Home">⚡</div>
     <div class="separator"></div>
     <div id="serverIcons"></div>
     <div class="separator"></div>
-    <div class="server-icon add-server" title="Add Server" onclick="showModal('createServerModal')">+</div>
+    <div id="addServerBtn" class="server-icon add-server" title="Add Server">+</div>
   </div>
   <div id="channelPanel">
     <div id="serverHeader"><span id="serverName">Home</span></div>
     <div id="channelList"></div>
     <div id="userPanel">
-      <div id="selfAvatar" class="user-avatar" onclick="showModal('profileModal')"></div>
+      <div id="selfAvatar" class="user-avatar"></div>
       <div id="selfInfo">
         <div id="selfUsername"></div>
         <div id="selfTag" style="font-size:12px;color:#96989d"></div>
       </div>
       <div style="margin-left:auto;display:flex;gap:8px">
-        <button class="icon-btn" title="Settings" onclick="showSettings()">⚙</button>
-        <button class="icon-btn" title="Store" onclick="openStore()">🛒</button>
-        <button id="adminBtn" class="icon-btn" title="Admin" onclick="openAdmin()" style="display:none;color:#ed4245">🛡</button>
+        <button id="settingsBtn" class="icon-btn" title="Settings">⚙</button>
+        <button id="storeBtn" class="icon-btn" title="Store">🛒</button>
+        <button id="adminBtn" class="icon-btn" title="Admin" style="display:none;color:#ed4245">🛡</button>
       </div>
     </div>
   </div>
@@ -42,9 +42,9 @@
   <div id="homeView">
     <div id="homePanel">
       <div class="home-tabs">
-        <button class="home-tab active" onclick="showHomeTab('friends',this)">👥 Friends</button>
-        <button class="home-tab" onclick="showHomeTab('requests',this)">📬 Requests</button>
-        <button class="home-tab" onclick="showHomeTab('dms',this)">💬 DMs</button>
+        <button class="home-tab active" data-tab="friends">👥 Friends</button>
+        <button class="home-tab" data-tab="requests">📬 Requests</button>
+        <button class="home-tab" data-tab="dms">💬 DMs</button>
       </div>
       <div id="homeContent"></div>
     </div>
@@ -61,7 +61,7 @@
     <div id="typingBar"></div>
     <div id="inputArea">
       <textarea id="msgInput" placeholder="Send a message…" rows="1" maxlength="2000"></textarea>
-      <button id="sendBtn" onclick="sendMessage()">Send</button>
+      <button id="sendBtn">Send</button>
     </div>
   </div>
 
@@ -72,34 +72,34 @@
     <div id="dmTypingBar"></div>
     <div id="dmInputArea">
       <textarea id="dmInput" placeholder="Send a message…" rows="1" maxlength="2000"></textarea>
-      <button onclick="sendDM()">Send</button>
+      <button id="sendDMBtn">Send</button>
     </div>
   </div>
 </div>
 
 <!-- ── MODALS ── -->
 <!-- Create Server -->
-<div id="createServerModal" class="modal-bg" onclick="if(event.target===this)closeModal('createServerModal')">
+<div id="createServerModal" class="modal-bg">
   <div class="modal"><h2>Create a Server</h2>
     <div class="field"><label>Server Name</label><input type="text" id="newServerName" placeholder="My Awesome Server" maxlength="100"></div>
     <div class="field"><label>Description (optional)</label><input type="text" id="newServerDesc" placeholder="What's this server about?" maxlength="300"></div>
-    <div class="btn-row"><button class="btn-secondary" onclick="closeModal('createServerModal')">Cancel</button><button class="btn-primary" onclick="createServer()">Create</button></div>
+    <div class="btn-row"><button id="createServerCancelBtn" class="btn-secondary">Cancel</button><button id="createServerCreateBtn" class="btn-primary">Create</button></div>
   </div>
 </div>
 
 <!-- Join Server -->
-<div id="joinServerModal" class="modal-bg" onclick="if(event.target===this)closeModal('joinServerModal')">
+<div id="joinServerModal" class="modal-bg">
   <div class="modal"><h2>Join a Server</h2>
     <div class="field"><label>Invite Code</label><input type="text" id="joinCode" placeholder="e.g. AbCd1234"></div>
-    <div class="btn-row"><button class="btn-secondary" onclick="closeModal('joinServerModal')">Cancel</button><button class="btn-primary" onclick="joinServer()">Join</button></div>
+    <div class="btn-row"><button id="joinServerCancelBtn" class="btn-secondary">Cancel</button><button id="joinServerJoinBtn" class="btn-primary">Join</button></div>
   </div>
 </div>
 
 <!-- Profile modal -->
-<div id="profileModal" class="modal-bg" onclick="if(event.target===this)closeModal('profileModal')">
+<div id="profileModal" class="modal-bg">
   <div class="modal" style="max-width:420px">
     <div id="profileBanner" style="height:100px;background:linear-gradient(135deg,#5865f2,#eb459e);border-radius:8px 8px 0 0;margin:-24px -24px 16px;position:relative">
-      <div id="profileAvatar" style="width:80px;height:80px;border-radius:50%;border:4px solid #1e1f22;background:#36393f;position:absolute;bottom:-40px;left:16px;display:flex;align-items:center;justify-content:center;font-size:32px;overflow:hidden"></div>
+      <div id="profileAvatar" style="width:80px;height:80px;border-radius:50%;border:4px solid #1e1f22;background:#36393f;position:absolute;bottom:-40px;left:16px;display:flex;align-items:center;"></div>
     </div>
     <div style="margin-top:48px">
       <div id="profileUsername" style="font-size:20px;font-weight:700"></div>
@@ -108,65 +108,65 @@
       <div id="profileStats" style="display:flex;gap:16px;font-size:13px;color:#96989d;margin-bottom:16px"></div>
       <div id="profileActions"></div>
     </div>
-    <button class="modal-close" onclick="closeModal('profileModal')">×</button>
+    <button class="modal-close">×</button>
   </div>
 </div>
 
 <!-- Settings modal -->
-<div id="settingsModal" class="modal-bg" onclick="if(event.target===this)closeModal('settingsModal')">
+<div id="settingsModal" class="modal-bg">
   <div class="modal settings-modal">
     <div class="settings-nav">
-      <button class="settings-tab active" onclick="showSettingsTab('account',this)">Account</button>
-      <button class="settings-tab" onclick="showSettingsTab('profile',this)">Profile</button>
-      <button class="settings-tab" onclick="showSettingsTab('privacy',this)">Privacy</button>
-      <button class="settings-tab" onclick="openStore();closeModal('settingsModal')">Store →</button>
+      <button class="settings-tab active" data-tab="account">Account</button>
+      <button class="settings-tab" data-tab="profile">Profile</button>
+      <button class="settings-tab" data-tab="privacy">Privacy</button>
+      <button id="settingsStoreBtn" class="settings-tab">Store →</button>
       <div style="flex:1"></div>
-      <button class="settings-tab danger" onclick="logout()">Log Out</button>
+      <button id="logoutBtn" class="settings-tab danger">Log Out</button>
     </div>
     <div class="settings-body" id="settingsBody"></div>
-    <button class="modal-close" onclick="closeModal('settingsModal')">×</button>
+    <button class="modal-close">×</button>
   </div>
 </div>
 
 <!-- Store modal -->
-<div id="storeModal" class="modal-bg" onclick="if(event.target===this)closeModal('storeModal')">
+<div id="storeModal" class="modal-bg">
   <div class="modal store-modal">
     <h2>🛒 Sigma Store</h2>
     <div id="storePoints" style="color:#faa61a;font-weight:600;margin-bottom:16px;font-size:15px"></div>
     <div class="store-tabs">
-      <button class="store-tab active" data-filter="all" onclick="filterStore('all',this)">All</button>
-      <button class="store-tab" data-filter="subscription" onclick="filterStore('subscription',this)">Subscription</button>
-      <button class="store-tab" data-filter="namecolor" onclick="filterStore('namecolor',this)">Name Color</button>
-      <button class="store-tab" data-filter="theme" onclick="filterStore('theme',this)">Theme</button>
-      <button class="store-tab" data-filter="chateffect" onclick="filterStore('chateffect',this)">Effects</button>
+      <button class="store-tab active" data-filter="all">All</button>
+      <button class="store-tab" data-filter="subscription">Subscription</button>
+      <button class="store-tab" data-filter="namecolor">Name Color</button>
+      <button class="store-tab" data-filter="theme">Theme</button>
+      <button class="store-tab" data-filter="chateffect">Effects</button>
     </div>
     <div id="storeGrid" class="store-grid"></div>
-    <button class="modal-close" onclick="closeModal('storeModal')">×</button>
+    <button class="modal-close">×</button>
   </div>
 </div>
 
 <!-- Admin modal -->
-<div id="adminModal" class="modal-bg" onclick="if(event.target===this)closeModal('adminModal')">
+<div id="adminModal" class="modal-bg">
   <div class="modal admin-modal">
     <h2>🛡 Admin Dashboard</h2>
     <div class="admin-tabs">
-      <button class="admin-tab active" onclick="adminTab('overview',this)">Overview</button>
-      <button class="admin-tab" onclick="adminTab('users',this)">Users</button>
-      <button class="admin-tab" onclick="adminTab('bans',this)">Bans</button>
-      <button class="admin-tab" onclick="adminTab('modlogs',this)">Mod Logs</button>
-      <button class="admin-tab" onclick="adminTab('servers',this)">Servers</button>
+      <button class="admin-tab active" data-tab="overview">Overview</button>
+      <button class="admin-tab" data-tab="users">Users</button>
+      <button class="admin-tab" data-tab="bans">Bans</button>
+      <button class="admin-tab" data-tab="modlogs">Mod Logs</button>
+      <button class="admin-tab" data-tab="servers">Servers</button>
     </div>
     <div id="adminBody"></div>
-    <button class="modal-close" onclick="closeModal('adminModal')">×</button>
+    <button class="modal-close">×</button>
   </div>
 </div>
 
 <!-- Add Friend -->
-<div id="addFriendModal" class="modal-bg" onclick="if(event.target===this)closeModal('addFriendModal')">
+<div id="addFriendModal" class="modal-bg">
   <div class="modal" style="max-width:400px"><h2>Add Friend</h2>
-    <div class="field"><label>Search by username</label><input type="text" id="friendSearch" placeholder="username" oninput="searchUsers(this.value,'friendResults')"></div>
+    <div class="field"><label>Search by username</label><input type="text" id="friendSearch" placeholder="username"></div>
     <div id="friendResults"></div>
-    <button class="modal-close" onclick="closeModal('addFriendModal')">×</button>
+    <button class="modal-close">×</button>
   </div>
 </div>
 
