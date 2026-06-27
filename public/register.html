@@ -1,75 +1,65 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sigma Chat — Register</title>
-  <link rel="stylesheet" href="/css/main.css">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sigma Chat — Register</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;background:#111214;color:#dcddde;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px}
+.card{background:#1e1f22;border-radius:16px;padding:32px;width:100%;max-width:420px;box-shadow:0 8px 40px rgba(0,0,0,.5)}
+.logo{text-align:center;margin-bottom:24px}
+.logo h1{color:#5865f2;font-size:28px;font-weight:700}
+.logo p{color:#96989d;font-size:14px;margin-top:4px}
+h2{font-size:22px;font-weight:700;margin-bottom:6px;text-align:center}
+.sub{color:#96989d;font-size:14px;text-align:center;margin-bottom:24px}
+label{display:block;font-size:12px;font-weight:600;color:#b5bac1;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+input{width:100%;background:#2b2d31;border:1.5px solid #3f4147;border-radius:8px;color:#dcddde;font-size:15px;padding:11px 14px;outline:none;transition:border-color .15s}
+input:focus{border-color:#5865f2}
+.field{margin-bottom:16px}
+.hint{font-size:12px;color:#96989d;margin-top:4px}
+.btn{width:100%;background:#5865f2;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;padding:12px;cursor:pointer;transition:background .15s;margin-top:4px}
+.btn:hover{background:#4752c4}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.toggle{text-align:center;margin-top:18px;font-size:14px;color:#96989d}
+.toggle a{color:#5865f2;text-decoration:none;font-weight:600}
+.error{background:#3d0f0f;border:1px solid #ed4245;border-radius:8px;padding:10px 14px;font-size:13px;color:#ed4245;margin-bottom:16px;display:none}
+.success{background:#0f3d1f;border:1px solid #57f287;border-radius:8px;padding:10px 14px;font-size:13px;color:#57f287;margin-bottom:16px;display:none}
+</style>
 </head>
-<body class="auth-page">
-  <div class="auth-bg">
-    <div class="auth-card">
-      <div class="auth-logo">
-        <div class="logo-icon">Σ</div>
-        <span class="logo-text">Sigma Chat</span>
-      </div>
-      <h1>Create an account</h1>
-      <p class="auth-sub">Join the community</p>
-      <div id="msg-box" class="msg-box hidden"></div>
-      <form onsubmit="doRegister(event)">
-        <div class="field-group">
-          <label>USERNAME</label>
-          <input type="text" id="username" placeholder="e.g. sigma_user" required minlength="2" maxlength="32" autocomplete="username" pattern="[a-zA-Z0-9_.\-]+">
-          <span class="field-hint">Letters, numbers, underscores, dots and dashes only</span>
-        </div>
-        <div class="field-group">
-          <label>EMAIL</label>
-          <input type="email" id="email" placeholder="you@example.com" required autocomplete="email">
-        </div>
-        <div class="field-group">
-          <label>PASSWORD</label>
-          <input type="password" id="password" placeholder="At least 8 characters" required minlength="8" autocomplete="new-password">
-        </div>
-        <button type="submit" class="btn-primary btn-full" id="reg-btn">Create Account</button>
-      </form>
-      <p class="auth-footer">Already have an account? <a href="/login.html">Log In</a></p>
-    </div>
-  </div>
-  <script>
-    const msgBox = document.getElementById('msg-box');
-    function showMsg(msg, type = 'error') {
-      msgBox.className = `msg-box msg-${type}`;
-      msgBox.textContent = msg;
+<body>
+<div class="card">
+  <div class="logo"><h1>⚡ Sigma Chat</h1><p>Join the community</p></div>
+  <h2>Create an account</h2>
+  <p class="sub">It's free and always will be</p>
+  <div id="errBox" class="error"></div>
+  <div id="okBox" class="success"></div>
+  <form id="regForm">
+    <div class="field"><label>Username</label><input type="text" id="username" required minlength="2" maxlength="32" pattern="[a-zA-Z0-9_.\-]+"><div class="hint">2–32 chars, letters/numbers/_.-</div></div>
+    <div class="field"><label>Email</label><input type="email" id="email" required autocomplete="email"></div>
+    <div class="field"><label>Password</label><input type="password" id="password" required minlength="8"><div class="hint">At least 8 characters</div></div>
+    <button class="btn" type="submit" id="regBtn">Create Account</button>
+  </form>
+  <div class="toggle">Already have an account? <a href="/login.html">Sign In</a></div>
+</div>
+<script>
+function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el.style.display='block'}
+function hide(id){document.getElementById(id).style.display='none'}
+document.getElementById('regForm').addEventListener('submit',async e=>{
+  e.preventDefault();hide('errBox');hide('okBox');
+  const btn=document.getElementById('regBtn');btn.disabled=true;btn.textContent='Creating account…';
+  try{
+    const r=await fetch('/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:document.getElementById('username').value,email:document.getElementById('email').value,password:document.getElementById('password').value}),credentials:'include'});
+    const d=await r.json();
+    if(!r.ok){
+      const msg=d.errors?d.errors.map(e=>e.msg).join(', '):(d.error||'Registration failed');
+      show('errBox',msg);btn.disabled=false;btn.textContent='Create Account';return;
     }
-    async function doRegister(e) {
-      e.preventDefault();
-      const btn = document.getElementById('reg-btn');
-      btn.disabled = true; btn.textContent = 'Creating account...';
-      const body = {
-        username: document.getElementById('username').value,
-        email: document.getElementById('email').value,
-        password: document.getElementById('password').value,
-      };
-      try {
-        const res = await fetch('/auth/register', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body), credentials: 'include',
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          const errMsg = data.errors ? data.errors.map(e => e.msg).join('. ') : (data.error || 'Registration failed');
-          showMsg(errMsg);
-          btn.disabled = false; btn.textContent = 'Create Account';
-          return;
-        }
-        showMsg('Account created! Check your email to verify your account.', 'success');
-        btn.textContent = 'Done!';
-        setTimeout(() => location.href = '/login.html', 3000);
-      } catch (err) {
-        showMsg('Network error. Please try again.');
-        btn.disabled = false; btn.textContent = 'Create Account';
-      }
-    }
-  </script>
+    if(d.autoLogin){location.href='/app.html';return;}
+    show('okBox',d.message||'Registered! Check your email to verify your account.');
+    btn.textContent='Done!';
+  }catch{show('errBox','Network error');btn.disabled=false;btn.textContent='Create Account';}
+});
+</script>
 </body>
 </html>

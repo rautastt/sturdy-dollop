@@ -3,30 +3,115 @@ const router = express.Router();
 const db = require('../config/database');
 const { requireAuth } = require('../middleware/auth');
 
+// ─── Store catalogue (each id is unique) ──────────────────────────────────────
 const STORE_ITEMS = [
-  { id: 'rail', name: 'Rail Subscription', cost: 1000, type: 'subscription', description: 'Unlock Rail badge and exclusive features' },
-  { id: 'theme_midnight', name: 'Midnight Theme', cost: 200, type: 'theme', description: 'A deep midnight blue theme' },
-  { id: 'theme_sunset', name: 'Sunset Theme', cost: 200, type: 'theme', description: 'Warm sunset gradient theme' },
-  { id: 'namecolor_gold', name: 'Gold Name Color', cost: 150, type: 'namecolor', description: 'Display your name in gold', metadata: { color: '#FFD700' } },
-  { id: 'namecolor_cyan', name: 'Cyan Name Color', cost: 150, type: 'namecolor', description: 'Display your name in cyan', metadata: { color: '#00CED1' } },
-  { id: 'namecolor_pink', name: 'Pink Name Color', cost: 150, type: 'namecolor', description: 'Display your name in pink', metadata: { color: '#FF69B4' } },
-  { id: 'banner_galaxy', name: 'Galaxy Banner', cost: 300, type: 'banner', description: 'A stunning galaxy profile banner' },
-  { id: 'banner_neon', name: 'Neon Banner', cost: 300, type: 'banner', description: 'Neon lights profile banner' },
-  { id: 'effect_sparkle', name: 'Sparkle Chat Effect', cost: 250, type: 'chateffect', description: 'Your messages sparkle when sent' },
-  { id: 'effect_fire', name: 'Fire Chat Effect', cost: 250, type: 'chateffect', description: 'Your messages burst with flames' },
+  {
+    id: 'rail',
+    name: 'Rail Subscription',
+    cost: 1000,
+    type: 'subscription',
+    icon: '🚆',
+    description: 'Get the Rail badge and exclusive member perks',
+  },
+  {
+    id: 'namecolor_gold',
+    name: 'Gold Name',
+    cost: 150,
+    type: 'namecolor',
+    icon: '🌟',
+    description: 'Display your name in gold',
+    value: '#FFD700',
+  },
+  {
+    id: 'namecolor_cyan',
+    name: 'Cyan Name',
+    cost: 150,
+    type: 'namecolor',
+    icon: '💎',
+    description: 'Display your name in cyan',
+    value: '#00CED1',
+  },
+  {
+    id: 'namecolor_pink',
+    name: 'Pink Name',
+    cost: 150,
+    type: 'namecolor',
+    icon: '🌸',
+    description: 'Display your name in pink',
+    value: '#FF69B4',
+  },
+  {
+    id: 'namecolor_green',
+    name: 'Green Name',
+    cost: 150,
+    type: 'namecolor',
+    icon: '🍀',
+    description: 'Display your name in green',
+    value: '#57f287',
+  },
+  {
+    id: 'namecolor_red',
+    name: 'Red Name',
+    cost: 150,
+    type: 'namecolor',
+    icon: '🔴',
+    description: 'Display your name in red',
+    value: '#ed4245',
+  },
+  {
+    id: 'theme_midnight',
+    name: 'Midnight Theme',
+    cost: 200,
+    type: 'theme',
+    icon: '🌙',
+    description: 'A deep midnight blue theme',
+    value: 'midnight',
+  },
+  {
+    id: 'theme_sunset',
+    name: 'Sunset Theme',
+    cost: 200,
+    type: 'theme',
+    icon: '🌅',
+    description: 'Warm sunset gradient theme',
+    value: 'sunset',
+  },
+  {
+    id: 'effect_sparkle',
+    name: 'Sparkle Effect',
+    cost: 500,
+    type: 'chateffect',
+    icon: '✨',
+    description: 'Your messages sparkle and shimmer',
+    value: 'sparkle',
+  },
+  {
+    id: 'effect_confetti',
+    name: 'Confetti Effect',
+    cost: 500,
+    type: 'chateffect',
+    icon: '🎊',
+    description: 'Send confetti bursting with every message',
+    value: 'confetti',
+  },
 ];
 
 // GET /api/store
 router.get('/', requireAuth, async (req, res) => {
   try {
-    const purchased = await db.query(`SELECT item FROM store_purchases WHERE user_id = $1`, [req.session.userId]);
-    const purchasedIds = new Set(purchased.rows.map(r => r.item));
+    const purchased = await db.query(
+      `SELECT item FROM store_purchases WHERE user_id = $1`, [req.session.userId]
+    );
+    const ownedIds = new Set(purchased.rows.map(r => r.item));
     const user = await db.query(`SELECT points FROM users WHERE id = $1`, [req.session.userId]);
+
     res.json({
-      points: user.rows[0].points,
-      items: STORE_ITEMS.map(i => ({ ...i, owned: purchasedIds.has(i.id) })),
+      points: user.rows[0]?.points ?? 0,
+      // Never send duplicate items — STORE_ITEMS already has unique ids
+      items: STORE_ITEMS.map(item => ({ ...item, owned: ownedIds.has(item.id) })),
     });
   } catch (err) {
+    console.error('Store fetch error:', err);
     res.status(500).json({ error: 'Failed to fetch store' });
   }
 });
@@ -34,41 +119,62 @@ router.get('/', requireAuth, async (req, res) => {
 // POST /api/store/buy
 router.post('/buy', requireAuth, async (req, res) => {
   const { itemId } = req.body;
+  if (!itemId) return res.status(400).json({ error: 'No item specified' });
+
   const item = STORE_ITEMS.find(i => i.id === itemId);
   if (!item) return res.status(404).json({ error: 'Item not found' });
 
   const client = await db.getClient();
   try {
     await client.query('BEGIN');
-    const user = await client.query(`SELECT points FROM users WHERE id = $1 FOR UPDATE`, [req.session.userId]);
-    if (user.rows[0].points < item.cost) {
+
+    // Lock user row to prevent race conditions
+    const userRow = await client.query(
+      `SELECT points FROM users WHERE id = $1 FOR UPDATE`, [req.session.userId]
+    );
+    if (!userRow.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'User not found' }); }
+
+    const points = userRow.rows[0].points;
+    if (points < item.cost) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ error: `Not enough points. Need ${item.cost}, you have ${user.rows[0].points}` });
+      return res.status(400).json({ error: `Not enough points — need ${item.cost}, you have ${points}` });
     }
-    const alreadyOwned = await client.query(`SELECT id FROM store_purchases WHERE user_id = $1 AND item = $2`, [req.session.userId, itemId]);
-    if (alreadyOwned.rows.length) {
+
+    // Check not already owned
+    const owns = await client.query(
+      `SELECT id FROM store_purchases WHERE user_id = $1 AND item = $2`, [req.session.userId, item.id]
+    );
+    if (owns.rows.length) {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: 'You already own this item' });
     }
 
+    // Deduct points & record purchase
     await client.query(`UPDATE users SET points = points - $1 WHERE id = $2`, [item.cost, req.session.userId]);
-    await client.query(`INSERT INTO store_purchases (user_id, item, cost, metadata) VALUES ($1, $2, $3, $4)`,
-      [req.session.userId, item.id, item.cost, JSON.stringify(item.metadata || {})]);
+    await client.query(
+      `INSERT INTO store_purchases (user_id, item, cost) VALUES ($1, $2, $3)`,
+      [req.session.userId, item.id, item.cost]
+    );
 
-    // Apply item effects
+    // Apply item effect immediately
     if (item.type === 'subscription' && item.id === 'rail') {
       await client.query(`UPDATE users SET badge_rail = TRUE WHERE id = $1`, [req.session.userId]);
     } else if (item.type === 'namecolor') {
-      await client.query(`UPDATE users SET name_color = $1 WHERE id = $2`, [item.metadata.color, req.session.userId]);
+      await client.query(`UPDATE users SET name_color = $1 WHERE id = $2`, [item.value, req.session.userId]);
     } else if (item.type === 'theme') {
-      await client.query(`UPDATE users SET theme = $1 WHERE id = $2`, [item.id, req.session.userId]);
+      await client.query(`UPDATE users SET theme = $1 WHERE id = $2`, [item.value, req.session.userId]);
     } else if (item.type === 'chateffect') {
-      await client.query(`UPDATE users SET chat_effect = $1 WHERE id = $2`, [item.id, req.session.userId]);
+      await client.query(`UPDATE users SET chat_effect = $1 WHERE id = $2`, [item.value, req.session.userId]);
     }
 
     await client.query('COMMIT');
+
     const updated = await db.query(`SELECT points FROM users WHERE id = $1`, [req.session.userId]);
-    res.json({ message: `Purchased ${item.name}!`, points: updated.rows[0].points });
+    res.json({
+      message: `Purchased ${item.name}!`,
+      points: updated.rows[0].points,
+      applied: item.type,
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Purchase error:', err);

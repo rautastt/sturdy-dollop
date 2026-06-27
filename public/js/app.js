@@ -1,1083 +1,893 @@
-// ─── Sigma Chat Client ────────────────────────────────────────────────────────
-
-let me = null;
-let socket = null;
-let currentServerId = null;
-let currentChannelId = null;
-let currentDmId = null;
-let currentGroupId = null;
-let servers = [];
-let typingUsers = {};
+'use strict';
+// ── State ──────────────────────────────────────────────────────────────────────
+let me = null, socket = null;
+let currentChannel = null, currentServer = null, currentDM = null;
+let servers = [], storeData = null;
 let typingTimer = null;
-let isTyping = false;
-let replyToId = null;
-let replyToName = null;
-let memberListVisible = true;
+let adminCache = {};
 
-const EMOJIS = ['😀','😂','🥰','😎','🤔','🤯','🔥','❤️','👍','👎','🎉','✨','💯','⚡','🌟',
-  '💀','🤣','😭','🙏','👀','💬','🎮','🚀','🌈','💎','🦄','🍕','☕','💻','🎵'];
-
-// ─── Init ──────────────────────────────────────────────────────────────────────
+// ── Init ───────────────────────────────────────────────────────────────────────
 async function init() {
   try {
-    const res = await fetch('/auth/me', { credentials: 'include' });
-    if (!res.ok) { location.href = '/login.html'; return; }
-    me = await res.json();
-    if (me.is_banned) { location.href = '/login.html?error=banned'; return; }
-    setupSocket();
-    renderProfileBar();
-    await loadServers();
-    showHome();
-    document.getElementById('loading-screen').style.display = 'none';
-    document.getElementById('app-layout').style.display = 'flex';
-    if (!me.email_verified) document.getElementById('unverified-banner').style.display = 'flex';
-  } catch (err) {
-    console.error('Init error:', err);
-    location.href = '/login.html';
-  }
+    const r = await api('/auth/me');
+    me = await r.json();
+    if (!r.ok) return location.href = '/login.html';
+  } catch { return location.href = '/login.html'; }
+
+  applyTheme(me.theme);
+  renderSelf();
+  connectSocket();
+  await loadServers();
+  showHome();
+  showHomeTab('friends', document.querySelector('.home-tab'));
+  if (me.is_admin) document.getElementById('adminBtn').style.display = 'flex';
+  document.getElementById('msgInput').addEventListener('keydown', onMsgKey);
+  document.getElementById('dmInput').addEventListener('keydown', onDMKey);
 }
 
-// ─── Socket ────────────────────────────────────────────────────────────────────
-function setupSocket() {
+// ── API helper ─────────────────────────────────────────────────────────────────
+function api(url, opts = {}) {
+  return fetch(url, { credentials: 'include', headers: { 'Content-Type': 'application/json', ...opts.headers }, ...opts });
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────────
+let toastTimer;
+function toast(msg, type = '') {
+  const el = document.getElementById('toast') || (() => {
+    const t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); return t;
+  })();
+  el.textContent = msg;
+  el.className = 'show' + (type ? ' ' + type : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.className = '', 3000);
+}
+
+// ── Theme ──────────────────────────────────────────────────────────────────────
+function applyTheme(theme) {
+  document.body.className = '';
+  if (theme && theme !== 'default') document.body.classList.add('theme-' + theme);
+}
+
+// ── Render self ────────────────────────────────────────────────────────────────
+function renderSelf() {
+  const av = document.getElementById('selfAvatar');
+  av.innerHTML = me.avatar ? `<img src="${me.avatar}" alt="">` : me.username[0].toUpperCase();
+  document.getElementById('selfUsername').textContent = me.display_name || me.username;
+  document.getElementById('selfTag').textContent = `Lv.${me.level} · ${me.points} pts`;
+  if (me.name_color) document.getElementById('selfUsername').style.color = me.name_color;
+}
+
+// ── Socket ─────────────────────────────────────────────────────────────────────
+function connectSocket() {
   socket = io({ withCredentials: true });
 
-  socket.on('connect', () => console.log('Socket connected'));
-  socket.on('disconnect', () => console.log('Socket disconnected'));
-
-  socket.on('message:new', (msg) => {
-    if (msg.channel_id === currentChannelId) appendMessage(msg);
+  socket.on('message:new', msg => {
+    if (currentChannel && msg.channel_id === currentChannel.id) appendMessage(msg, document.getElementById('messages'));
   });
-
-  socket.on('message:delete', ({ id, channelId }) => {
-    if (channelId === currentChannelId) {
-      const el = document.getElementById(`msg-${id}`);
-      if (el) {
-        el.querySelector('.message-content').textContent = 'This message was deleted.';
-        el.querySelector('.message-content').classList.add('deleted');
-        const actions = el.querySelector('.message-actions');
-        if (actions) actions.remove();
-      }
-    }
+  socket.on('message:delete', ({ id }) => {
+    const el = document.getElementById(`msg-${id}`);
+    if (el) el.remove();
   });
-
-  socket.on('message:edit', (msg) => {
-    const el = document.getElementById(`msg-${msg.id}`);
-    if (el) {
-      el.querySelector('.message-content').textContent = msg.content;
-      const editedEl = el.querySelector('.message-edited');
-      if (editedEl) editedEl.textContent = '(edited)';
-      else el.querySelector('.message-content').insertAdjacentHTML('afterend', '<span class="message-edited">(edited)</span>');
-    }
+  socket.on('message:edit', msg => {
+    const body = document.querySelector(`#msg-${msg.id} .msg-content`);
+    if (body) { body.textContent = msg.content; }
   });
-
-  socket.on('message:pinned', ({ messageId }) => toast('Message pinned 📌'));
-  socket.on('message:unpinned', () => toast('Message unpinned'));
-
-  socket.on('message:react', ({ messageId, userId, emoji }) => updateReaction(messageId, userId, emoji, true));
-  socket.on('message:unreact', ({ messageId, userId, emoji }) => updateReaction(messageId, userId, emoji, false));
-
-  socket.on('dm:message', (msg) => {
-    if (msg.dm_channel_id === currentDmId) appendDmMessage(msg);
+  socket.on('dm:message', msg => {
+    if (currentDM && msg.dm_channel_id === currentDM.channelId) appendMessage(msg, document.getElementById('dmMessages'));
   });
-
-  socket.on('group:message', (msg) => {
-    if (msg.group_id === currentGroupId) appendDmMessage(msg);
+  socket.on('typing:start', ({ userId: uid, username, channelId }) => {
+    if (currentChannel && channelId === currentChannel.id && uid !== me.id) showTyping(username, 'typingBar');
   });
-
-  socket.on('typing:start', ({ userId, username, channelId }) => {
-    if (channelId !== currentChannelId) return;
-    typingUsers[userId] = username;
-    renderTyping();
+  socket.on('typing:stop', ({ channelId }) => {
+    if (currentChannel && channelId === currentChannel.id) clearTyping('typingBar');
   });
-
-  socket.on('typing:stop', ({ userId, channelId }) => {
-    if (channelId !== currentChannelId) return;
-    delete typingUsers[userId];
-    renderTyping();
+  socket.on('typing:start:dm', ({ userId: uid, username, dmChannelId }) => {
+    if (currentDM && dmChannelId === currentDM.channelId && uid !== me.id) showTyping(username, 'dmTypingBar');
   });
-
-  socket.on('presence:update', ({ userId, status }) => {
-    const dots = document.querySelectorAll(`[data-user-id="${userId}"] .status-dot`);
-    dots.forEach(d => { d.className = `status-dot status-${status}`; });
+  socket.on('typing:stop:dm', ({ dmChannelId }) => {
+    if (currentDM && dmChannelId === currentDM.channelId) clearTyping('dmTypingBar');
   });
-
-  socket.on('friend:request', ({ fromUsername }) => {
-    toast(`Friend request from ${fromUsername}!`, 'info');
+  socket.on('presence:update', ({ userId: uid, status }) => {
+    document.querySelectorAll(`.status-dot[data-uid="${uid}"]`).forEach(d => {
+      d.className = `status-dot status-${status}`;
+    });
   });
-
-  socket.on('friend:accepted', ({ byUsername }) => {
-    toast(`${byUsername} accepted your friend request!`, 'success');
-  });
+  socket.on('friend:request', ({ fromUsername }) => toast(`📬 ${fromUsername} sent you a friend request!`));
+  socket.on('friend:accepted', ({ byUsername }) => toast(`✅ ${byUsername} accepted your friend request!`));
 }
 
-// ─── Servers ───────────────────────────────────────────────────────────────────
+// ── Servers ────────────────────────────────────────────────────────────────────
 async function loadServers() {
-  const res = await fetch('/api/servers', { credentials: 'include' });
-  servers = await res.json();
-  renderServerDock();
+  const r = await api('/api/servers');
+  servers = await r.json();
+  renderServerList();
 }
 
-function renderServerDock() {
-  const icons = document.getElementById('server-icons');
-  icons.innerHTML = '';
-  for (const s of servers) {
-    const item = document.createElement('div');
-    item.className = 'dock-item';
-    item.id = `dock-server-${s.id}`;
-    item.setAttribute('data-server-id', s.id);
-    item.title = s.name;
-    if (s.icon) {
-      item.innerHTML = `<img src="${s.icon}" alt="${s.name}"><div class="dock-tooltip">${escHtml(s.name)}</div>`;
-    } else {
-      item.innerHTML = `<span>${escHtml(s.name).charAt(0)}</span><div class="dock-tooltip">${escHtml(s.name)}</div>`;
-    }
-    item.onclick = () => selectServer(s.id);
-    icons.appendChild(item);
-  }
-}
-
-async function selectServer(id) {
-  document.querySelectorAll('.dock-item').forEach(d => d.classList.remove('active'));
-  document.getElementById(`dock-server-${id}`)?.classList.add('active');
-  currentServerId = id;
-  currentChannelId = null;
-  currentDmId = null;
-  const res = await fetch(`/api/servers/${id}`, { credentials: 'include' });
-  if (!res.ok) { toast('Failed to load server', 'error'); return; }
-  const server = await res.json();
-  renderServerSidebar(server);
-  renderMemberList(server.members);
-  showChatArea();
-  document.getElementById('member-list').style.display = memberListVisible ? 'block' : 'none';
-  // Auto-select first text channel
-  const firstChannel = server.channels.find(c => c.type === 'text');
-  if (firstChannel) selectChannel(firstChannel.id, firstChannel.name, firstChannel.topic);
-}
-
-function renderServerSidebar(server) {
-  const title = document.getElementById('sidebar-title');
-  title.textContent = server.name;
-  title.onclick = () => showServerSettings(server);
-  const list = document.getElementById('channel-list');
-  list.innerHTML = '';
-  const isAdmin = server.myRole === 'owner' || server.myRole === 'admin';
-  const catHeader = document.createElement('div');
-  catHeader.className = 'channel-category';
-  catHeader.innerHTML = `
-    <span>Channels</span>
-    ${isAdmin ? `<span class="channel-category-add" title="Add channel" onclick="openModal('modal-create-channel')">+</span>` : ''}`;
-  list.appendChild(catHeader);
-  for (const ch of server.channels) {
-    const item = document.createElement('div');
-    item.className = 'channel-item';
-    item.id = `channel-item-${ch.id}`;
-    item.innerHTML = `<span class="channel-icon">${ch.type === 'announcement' ? '📢' : '#'}</span><span>${escHtml(ch.name)}</span>`;
-    item.onclick = () => selectChannel(ch.id, ch.name, ch.topic);
-    list.appendChild(item);
-  }
-}
-
-async function selectChannel(id, name, topic) {
-  document.querySelectorAll('.channel-item').forEach(i => i.classList.remove('active'));
-  document.getElementById(`channel-item-${id}`)?.classList.add('active');
-  currentChannelId = id;
-  currentDmId = null;
-  document.getElementById('ch-name').textContent = name;
-  document.getElementById('ch-icon').textContent = '#';
-  const topicEl = document.getElementById('ch-topic');
-  if (topic) { topicEl.textContent = topic; topicEl.style.display = ''; }
-  else topicEl.style.display = 'none';
-  document.getElementById('message-input').placeholder = `Message #${name}`;
-  document.getElementById('channel-start-name').textContent = `# ${name}`;
-  document.getElementById('channel-start-desc').textContent = `This is the beginning of #${name}`;
-  document.getElementById('btn-pinned').style.display = '';
-  document.getElementById('btn-members').style.display = '';
-  socket.emit('channel:join', id);
-  typingUsers = {};
-  renderTyping();
-  await loadMessages(id);
-}
-
-async function loadMessages(channelId) {
-  const container = document.getElementById('messages-container');
-  const welcome = container.querySelector('.messages-start');
-  while (container.lastChild !== welcome) container.removeChild(container.lastChild);
-  const res = await fetch(`/api/channels/${channelId}/messages`, { credentials: 'include' });
-  if (!res.ok) { toast('Failed to load messages', 'error'); return; }
-  const msgs = await res.json();
-  for (const msg of msgs) appendMessage(msg, false);
-  container.scrollTop = container.scrollHeight;
-}
-
-function appendMessage(msg, scroll = true) {
-  const container = document.getElementById('messages-container');
-  const id = `msg-${msg.id}`;
-  if (document.getElementById(id)) return;
-
-  const isMe = msg.user_id === me.id;
-  const timeStr = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const nameColor = msg.name_color || '#dcddde';
-  const avatarHtml = msg.avatar
-    ? `<img src="${msg.avatar}" class="avatar" width="40" height="40" title="${escHtml(msg.username)}">`
-    : `<div class="avatar-placeholder" style="width:40px;height:40px;font-size:16px;background:${strToColor(msg.username)}">${(msg.username || '?').charAt(0).toUpperCase()}</div>`;
-
-  const badges = [
-    msg.badge_admin ? '<span class="badge badge-admin">ADMIN</span>' : '',
-    msg.badge_gold ? '<span class="badge badge-gold">GOLD</span>' : '',
-    msg.badge_rail ? '<span class="badge badge-rail">RAIL</span>' : '',
-    msg.badge_blue ? '<span class="badge badge-blue">✓</span>' : '',
-  ].join('');
-
-  const replyHtml = msg.reply_message
-    ? `<div class="reply-preview" onclick="scrollToMsg(${msg.reply_to_id})">
-        <span class="reply-author">@${escHtml(msg.reply_message.author)}</span>
-        <span>${escHtml(msg.reply_message.content?.substring(0, 80) || '')}</span>
-       </div>` : '';
-
-  const actionsHtml = `
-    <div class="message-actions">
-      <div class="msg-action-btn" title="React" onclick="showEmojiForMsg(${msg.id}, event)">😊</div>
-      <div class="msg-action-btn" title="Reply" onclick="setReply(${msg.id},'${escHtml(msg.username)}')">↩</div>
-      ${isMe ? `<div class="msg-action-btn" title="Edit" onclick="editMsg(${msg.id})">✏</div>` : ''}
-      ${(isMe || me.is_admin) ? `<div class="msg-action-btn" title="Delete" onclick="deleteMsg(${msg.id})" style="color:var(--danger)">🗑</div>` : ''}
-      ${me.is_admin ? `<div class="msg-action-btn" title="Pin/unpin" onclick="togglePin(${msg.id},${msg.is_pinned})">📌</div>` : ''}
-    </div>`;
-
-  const div = document.createElement('div');
-  div.className = 'message-group';
-  div.id = id;
-  div.setAttribute('data-user-id', msg.user_id);
-  div.innerHTML = `
-    ${actionsHtml}
-    <div class="message-avatar" onclick="showProfile(${msg.user_id}, event)" style="cursor:pointer">${avatarHtml}</div>
-    ${replyHtml}
-    <div class="message-header">
-      <span class="message-author" style="color:${nameColor}" onclick="showProfile(${msg.user_id}, event)">${escHtml(msg.display_name || msg.username)}${badges}</span>
-      <span class="message-timestamp">${timeStr}</span>
-      ${msg.is_pinned ? '<span title="Pinned" style="font-size:12px">📌</span>' : ''}
-    </div>
-    <div class="message-content">${msg.is_deleted ? '<em style="color:var(--text-muted)">Message deleted</em>' : escHtml(msg.content)}</div>
-    ${msg.edited_at ? '<span class="message-edited">(edited)</span>' : ''}
-    <div class="message-reactions" id="reactions-${msg.id}"></div>`;
-
-  container.appendChild(div);
-  if (msg.reactions) renderReactions(msg.id, msg.reactions);
-  if (scroll) { container.scrollTop = container.scrollHeight; }
-}
-
-// ─── DMs ───────────────────────────────────────────────────────────────────────
-function showHome() {
-  document.querySelectorAll('.dock-item').forEach(d => d.classList.remove('active'));
-  document.getElementById('dock-home').classList.add('active');
-  currentServerId = null;
-  currentChannelId = null;
-  document.getElementById('sidebar-title').textContent = 'Direct Messages';
-  loadDmList();
-  hideChatArea();
-}
-
-async function loadDmList() {
-  const res = await fetch('/api/dms', { credentials: 'include' });
-  const dms = await res.json();
-  const list = document.getElementById('channel-list');
-  list.innerHTML = `<div class="dm-section-header">Direct Messages</div>`;
-  for (const dm of dms) {
-    const item = document.createElement('div');
-    item.className = 'dm-item';
-    item.id = `dm-item-${dm.dm_channel_id}`;
-    const avatarHtml = dm.avatar
-      ? `<img src="${dm.avatar}" class="avatar" width="32" height="32">`
-      : `<div class="avatar-placeholder" style="width:32px;height:32px;font-size:14px;background:${strToColor(dm.username)}">${(dm.username||'?').charAt(0).toUpperCase()}</div>`;
-    item.innerHTML = `${avatarHtml}<div><div class="dm-name">${escHtml(dm.display_name || dm.username)}</div><div class="dm-preview">${escHtml(dm.last_message || 'No messages yet')}</div></div>`;
-    item.onclick = () => openDm(dm.dm_channel_id, dm);
-    list.appendChild(item);
-  }
-  // Add friends section
-  list.insertAdjacentHTML('beforeend', `
-    <div class="dm-section-header" style="margin-top:8px;display:flex;justify-content:space-between;align-items:center">
-      Friends <span style="cursor:pointer;font-size:18px;color:var(--success)" onclick="loadFriendsList()" title="Refresh">↻</span>
-    </div>
-    <div id="friends-list"></div>
-    <div style="padding:8px 16px">
-      <button class="btn-ghost btn-full" onclick="openModal('modal-search')" style="font-size:13px">Find Users</button>
-    </div>
-  `);
-  loadFriendsList();
-}
-
-async function loadFriendsList() {
-  const res = await fetch('/api/friends', { credentials: 'include' });
-  const friends = await res.json();
-  const el = document.getElementById('friends-list');
-  if (!el) return;
+function renderServerList() {
+  const el = document.getElementById('serverIcons');
   el.innerHTML = '';
-  for (const f of friends) {
-    const item = document.createElement('div');
-    item.className = 'dm-item';
-    const avatarHtml = f.avatar
-      ? `<img src="${f.avatar}" class="avatar" width="32" height="32">`
-      : `<div class="avatar-placeholder" style="width:32px;height:32px;font-size:14px;background:${strToColor(f.username)}">${(f.username||'?').charAt(0).toUpperCase()}</div>`;
-    item.innerHTML = `${avatarHtml}<div><div class="dm-name">${escHtml(f.display_name || f.username)}</div><div class="dm-preview status-${f.status}">${f.status}</div></div>`;
-    item.onclick = async () => {
-      const r = await fetch('/api/dms/open', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:f.id}), credentials:'include' });
-      const d = await r.json();
-      openDm(d.dmChannelId, { ...f, dm_channel_id: d.dmChannelId });
-    };
-    el.appendChild(item);
-  }
-  if (!friends.length) {
-    el.innerHTML = '<div style="padding:8px 16px;font-size:13px;color:var(--text-muted)">No friends yet. Search for users to add!</div>';
-  }
+  servers.forEach(s => {
+    const div = document.createElement('div');
+    div.className = 'server-icon';
+    div.id = `server-icon-${s.id}`;
+    div.title = s.name;
+    div.innerHTML = s.icon ? `<img src="${s.icon}" alt="${s.name[0]}">` : `<span>${s.name[0].toUpperCase()}</span>`;
+    div.onclick = () => openServer(s.id);
+    el.appendChild(div);
+  });
 }
 
-async function openDm(dmChannelId, user) {
-  currentDmId = dmChannelId;
-  currentChannelId = null;
-  currentGroupId = null;
-  showChatArea();
-  document.getElementById('ch-icon').textContent = '@';
-  document.getElementById('ch-name').textContent = user.display_name || user.username;
-  document.getElementById('ch-topic').style.display = 'none';
-  document.getElementById('message-input').placeholder = `Message ${user.username}`;
-  document.getElementById('channel-start-name').textContent = `@ ${user.display_name || user.username}`;
-  document.getElementById('channel-start-desc').textContent = 'Beginning of your DM conversation.';
-  document.getElementById('btn-pinned').style.display = 'none';
-  document.getElementById('btn-members').style.display = 'none';
-  document.getElementById('member-list').style.display = 'none';
-  socket.emit('dm:join', dmChannelId);
-  const container = document.getElementById('messages-container');
-  const welcome = container.querySelector('.messages-start');
-  while (container.lastChild !== welcome) container.removeChild(container.lastChild);
-  const res = await fetch(`/api/dms/${dmChannelId}/messages`, { credentials: 'include' });
-  const msgs = await res.json();
-  for (const msg of msgs) appendDmMessage(msg, false);
+async function openServer(id) {
+  const r = await api(`/api/servers/${id}`);
+  if (!r.ok) return;
+  currentServer = await r.json();
+
+  document.querySelectorAll('.server-icon').forEach(el => el.classList.remove('active'));
+  const icon = document.getElementById(`server-icon-${id}`);
+  if (icon) icon.classList.add('active');
+  document.getElementById('homeBtn').classList.remove('active');
+
+  document.getElementById('serverName').textContent = currentServer.name;
+  renderChannels(currentServer.channels);
+
+  // Auto-open first text channel
+  const first = currentServer.channels.find(c => c.type === 'text');
+  if (first) openChannel(first);
+}
+
+function renderChannels(channels) {
+  const list = document.getElementById('channelList');
+  list.innerHTML = '';
+  channels.forEach(ch => {
+    const div = document.createElement('div');
+    div.className = 'channel-item';
+    div.id = `ch-${ch.id}`;
+    div.innerHTML = `<span class="channel-icon">${ch.type === 'voice' ? '🔊' : '#'}</span><span>${ch.name}</span>`;
+    div.onclick = () => openChannel(ch);
+    list.appendChild(div);
+  });
+}
+
+async function openChannel(ch) {
+  currentChannel = ch;
+  currentDM = null;
+  document.getElementById('homeView').style.display = 'none';
+  document.getElementById('dmView').style.display = 'none';
+  document.getElementById('channelView').style.display = 'flex';
+  document.querySelectorAll('.channel-item').forEach(el => el.classList.remove('active'));
+  const el = document.getElementById(`ch-${ch.id}`);
+  if (el) el.classList.add('active');
+  document.getElementById('chatHeaderName').textContent = ch.name;
+  document.getElementById('chatHeaderTopic').textContent = ch.topic || '';
+  document.getElementById('chatHeaderIcon').textContent = '#';
+  if (socket) socket.emit('channel:join', ch.id);
+  await loadMessages(ch.id);
+}
+
+// ── Messages ───────────────────────────────────────────────────────────────────
+async function loadMessages(channelId) {
+  const container = document.getElementById('messages');
+  container.innerHTML = '<div style="text-align:center;color:#96989d;padding:24px;font-size:14px">Loading…</div>';
+  const r = await api(`/api/channels/${channelId}/messages`);
+  if (!r.ok) { container.innerHTML = '<div style="text-align:center;color:#ed4245;padding:24px">Failed to load messages</div>'; return; }
+  const msgs = await r.json();
+  container.innerHTML = '';
+  msgs.forEach(m => appendMessage(m, container, false));
   container.scrollTop = container.scrollHeight;
 }
 
-function appendDmMessage(msg, scroll = true) {
-  const container = document.getElementById('messages-container');
-  const id = `msg-${msg.id}`;
-  if (document.getElementById(id)) return;
-  const timeStr = new Date(msg.created_at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
-  const avatarHtml = msg.avatar
-    ? `<img src="${msg.avatar}" class="avatar" width="40" height="40">`
-    : `<div class="avatar-placeholder" style="width:40px;height:40px;font-size:16px;background:${strToColor(msg.username)}">${(msg.username||'?').charAt(0).toUpperCase()}</div>`;
+function appendMessage(msg, container, scroll = true) {
   const div = document.createElement('div');
-  div.className = 'message-group';
-  div.id = id;
-  div.setAttribute('data-user-id', msg.user_id);
+  div.className = 'msg-group' + (me.chat_effect ? ` effect-${me.chat_effect}` : '');
+  div.id = `msg-${msg.id}`;
+  const isMe = msg.user_id === me.id;
+  const nameColor = msg.name_color ? `style="color:${msg.name_color}"` : '';
+  const badges = renderBadges(msg);
+  const time = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const avatarHTML = msg.avatar
+    ? `<img src="${msg.avatar}" alt="">`
+    : `<span style="font-size:16px">${(msg.display_name || msg.username || '?')[0].toUpperCase()}</span>`;
+  const replyHTML = msg.reply_message
+    ? `<div class="msg-reply">↩ <strong>${msg.reply_message.author}</strong>: ${esc(msg.reply_message.content)}</div>` : '';
+  const reactHTML = (msg.reactions || []).map(r =>
+    `<span class="reaction-chip ${r.me ? 'mine' : ''}" onclick="toggleReact(${msg.id},'${r.emoji}')" title="${r.count} reaction(s)">${r.emoji} ${r.count}</span>`
+  ).join('');
+
   div.innerHTML = `
-    <div class="message-avatar">${avatarHtml}</div>
-    <div class="message-header">
-      <span class="message-author">${escHtml(msg.display_name || msg.username)}</span>
-      <span class="message-timestamp">${timeStr}</span>
+    <div class="msg-avatar">${avatarHTML}</div>
+    <div class="msg-body">
+      ${replyHTML}
+      <div class="msg-header">
+        <span class="msg-author" ${nameColor} onclick="showUserProfile(${msg.user_id})">${badges}${esc(msg.display_name || msg.username)}</span>
+        <span class="msg-time">${time}</span>
+        ${msg.edited_at ? '<span class="msg-edited">(edited)</span>' : ''}
+      </div>
+      <div class="msg-content">${esc(msg.content)}</div>
+      ${reactHTML ? `<div class="msg-reactions">${reactHTML}</div>` : ''}
     </div>
-    <div class="message-content">${escHtml(msg.content)}</div>
-    ${msg.edited_at ? '<span class="message-edited">(edited)</span>' : ''}`;
+    <div class="msg-actions">
+      <button class="msg-action" onclick="addReact(${msg.id})" title="React">😀</button>
+      <button class="msg-action" onclick="replyTo(${msg.id},'${esc(msg.username)}')" title="Reply">↩</button>
+      ${isMe ? `<button class="msg-action danger" onclick="deleteMessage(${msg.id},${currentChannel?.id})" title="Delete">🗑</button>` : ''}
+    </div>`;
   container.appendChild(div);
   if (scroll) container.scrollTop = container.scrollHeight;
 }
 
-// ─── Sending messages ──────────────────────────────────────────────────────────
-async function sendMessage() {
-  const input = document.getElementById('message-input');
-  const content = input.value.trim();
-  if (!content) return;
-  input.value = '';
-  autoResizeTextarea(input);
-  stopTyping();
-
-  let url, body;
-  if (currentChannelId) {
-    url = `/api/channels/${currentChannelId}/messages`;
-    body = { content, replyToId };
-  } else if (currentDmId) {
-    url = `/api/dms/${currentDmId}/messages`;
-    body = { content };
-  } else if (currentGroupId) {
-    url = `/api/dms/groups/${currentGroupId}/messages`;
-    body = { content };
-  } else return;
-
-  cancelReply();
-  const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), credentials:'include' });
-  if (!res.ok) {
-    const d = await res.json();
-    toast(d.error || 'Failed to send message', 'error');
-  }
+function renderBadges(user) {
+  let b = '';
+  if (user.badge_admin) b += '<span class="badge badge-admin" title="Admin">🛡</span> ';
+  if (user.badge_gold) b += '<span class="badge badge-gold" title="Gold">⭐</span> ';
+  if (user.badge_blue) b += '<span class="badge badge-blue" title="Verified">✅</span> ';
+  if (user.badge_rail) b += '<span class="badge badge-rail" title="Rail">🚆</span> ';
+  return b;
 }
 
-function handleInputKey(e) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendMessage();
-  }
-  autoResizeTextarea(e.target);
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function autoResizeTextarea(el) {
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 200) + 'px';
-}
-
-let typingTimeout;
-function handleTyping() {
-  if (!socket || !currentChannelId) return;
-  if (!isTyping) {
-    isTyping = true;
-    socket.emit('typing:start', { channelId: currentChannelId });
-  }
-  clearTimeout(typingTimeout);
-  typingTimeout = setTimeout(stopTyping, 3000);
-}
-
-function stopTyping() {
-  if (isTyping && socket && currentChannelId) {
-    isTyping = false;
-    socket.emit('typing:stop', { channelId: currentChannelId });
-  }
-  clearTimeout(typingTimeout);
-}
-
-function renderTyping() {
-  const el = document.getElementById('typing-indicator');
-  const names = Object.values(typingUsers).filter(n => n !== me.username);
-  if (!names.length) { el.innerHTML = ''; return; }
-  const dotsHtml = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-  if (names.length === 1) el.innerHTML = `${dotsHtml} <strong>${escHtml(names[0])}</strong> is typing...`;
-  else if (names.length === 2) el.innerHTML = `${dotsHtml} <strong>${escHtml(names[0])}</strong> and <strong>${escHtml(names[1])}</strong> are typing...`;
-  else el.innerHTML = `${dotsHtml} Several people are typing...`;
-}
-
-// ─── Message actions ───────────────────────────────────────────────────────────
-function setReply(msgId, username) {
+let replyToId = null;
+function replyTo(msgId, username) {
   replyToId = msgId;
-  replyToName = username;
-  document.getElementById('reply-to-name').textContent = username;
-  document.getElementById('reply-bar').style.display = 'flex';
-  document.getElementById('message-input').focus();
-}
-function cancelReply() {
-  replyToId = null; replyToName = null;
-  document.getElementById('reply-bar').style.display = 'none';
+  document.getElementById('msgInput').placeholder = `Replying to @${username}… (Esc to cancel)`;
+  document.getElementById('msgInput').focus();
 }
 
-async function deleteMsg(msgId) {
+async function sendMessage() {
+  const input = document.getElementById('msgInput');
+  const content = input.value.trim();
+  if (!content || !currentChannel) return;
+  input.value = '';
+  input.style.height = 'auto';
+  socket?.emit('typing:stop', { channelId: currentChannel.id });
+  const body = { content };
+  if (replyToId) { body.replyToId = replyToId; replyToId = null; input.placeholder = 'Send a message…'; }
+  const r = await api(`/api/channels/${currentChannel.id}/messages`, { method: 'POST', body: JSON.stringify(body) });
+  if (!r.ok) { const d = await r.json(); toast(d.error || 'Failed to send', 'error'); }
+}
+
+async function deleteMessage(msgId, channelId) {
   if (!confirm('Delete this message?')) return;
-  const res = await fetch(`/api/channels/${currentChannelId}/messages/${msgId}`, { method:'DELETE', credentials:'include' });
-  if (!res.ok) toast('Failed to delete message', 'error');
+  await api(`/api/channels/${channelId}/messages/${msgId}`, { method: 'DELETE' });
 }
 
-async function editMsg(msgId) {
-  const el = document.getElementById(`msg-${msgId}`).querySelector('.message-content');
-  const current = el.textContent;
-  const newContent = prompt('Edit message:', current);
-  if (!newContent || newContent === current) return;
-  const res = await fetch(`/api/channels/${currentChannelId}/messages/${msgId}`, {
-    method:'PUT', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({ content: newContent }), credentials:'include',
+async function toggleReact(msgId, emoji) {
+  await api(`/api/channels/${currentChannel?.id}/messages/${msgId}/react/${emoji}`, { method: 'DELETE' });
+}
+
+function addReact(msgId) {
+  const emojis = ['👍','❤️','😂','😮','😢','😡','🔥','💯'];
+  const popup = document.createElement('div');
+  popup.style.cssText = `position:fixed;background:#2b2d31;border:1px solid #3f4147;border-radius:8px;padding:8px;display:flex;gap:6px;z-index:2000;font-size:20px;box-shadow:0 4px 20px rgba(0,0,0,.5)`;
+  const msg = document.getElementById(`msg-${msgId}`);
+  const rect = msg?.getBoundingClientRect() || { top: 100, left: 100 };
+  popup.style.top = (rect.top - 50) + 'px';
+  popup.style.left = rect.left + 'px';
+  emojis.forEach(e => {
+    const btn = document.createElement('button');
+    btn.textContent = e;
+    btn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:20px;border-radius:4px;padding:4px';
+    btn.onmouseenter = () => btn.style.background = '#3f4147';
+    btn.onmouseleave = () => btn.style.background = 'none';
+    btn.onclick = () => { api(`/api/channels/${currentChannel?.id}/messages/${msgId}/react`, { method: 'POST', body: JSON.stringify({ emoji: e }) }); popup.remove(); };
+    popup.appendChild(btn);
   });
-  if (!res.ok) toast('Failed to edit message', 'error');
+  document.body.appendChild(popup);
+  setTimeout(() => document.addEventListener('click', () => popup.remove(), { once: true }), 10);
 }
 
-async function togglePin(msgId, isPinned) {
-  const url = `/api/channels/${currentChannelId}/messages/${msgId}/pin`;
-  await fetch(url, { method: isPinned ? 'DELETE' : 'POST', credentials:'include' });
-}
-
-async function showPinned() {
-  const res = await fetch(`/api/channels/${currentChannelId}/pinned`, { credentials:'include' });
-  const msgs = await res.json();
-  if (!msgs.length) { toast('No pinned messages in this channel'); return; }
-  const html = msgs.map(m => `<div style="padding:8px;border-bottom:1px solid var(--border)"><strong>${escHtml(m.username)}</strong>: ${escHtml(m.content)}</div>`).join('');
-  showSimpleModal('Pinned Messages', html);
-}
-
-function scrollToMsg(id) {
-  const el = document.getElementById(`msg-${id}`);
-  if (el) { el.scrollIntoView({ behavior:'smooth', block:'center' }); el.style.background='rgba(88,101,242,0.2)'; setTimeout(()=>el.style.background='',1500); }
-}
-
-// ─── Reactions ─────────────────────────────────────────────────────────────────
-let emojiTargetMsgId = null;
-
-function showEmojiForMsg(msgId, e) {
-  e.stopPropagation();
-  emojiTargetMsgId = msgId;
-  const picker = document.getElementById('emoji-picker');
-  if (picker.innerHTML === '') {
-    picker.innerHTML = EMOJIS.map(emoji =>
-      `<span style="cursor:pointer;padding:4px;border-radius:4px;text-align:center" onmouseenter="this.style.background='var(--bg-surface)'" onmouseleave="this.style.background=''" onclick="reactToMsg('${emoji}')">${emoji}</span>`
-    ).join('');
+function onMsgKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); return; }
+  if (e.key === 'Escape') { replyToId = null; document.getElementById('msgInput').placeholder = 'Send a message…'; }
+  if (socket && currentChannel) {
+    socket.emit('typing:start', { channelId: currentChannel.id });
+    clearTimeout(typingTimer);
+    typingTimer = setTimeout(() => socket.emit('typing:stop', { channelId: currentChannel.id }), 2000);
   }
-  picker.classList.remove('hidden');
-  const rect = e.target.getBoundingClientRect();
-  picker.style.left = Math.min(rect.left, window.innerWidth - 260) + 'px';
-  picker.style.top = (rect.top - picker.offsetHeight - 8) + 'px';
 }
 
-function toggleEmojiPicker() {
-  const picker = document.getElementById('emoji-picker');
-  emojiTargetMsgId = null;
-  if (picker.innerHTML === '') {
-    picker.innerHTML = EMOJIS.map(emoji =>
-      `<span style="cursor:pointer;padding:4px;border-radius:4px;text-align:center" onclick="insertEmoji('${emoji}')">${emoji}</span>`
-    ).join('');
-  }
-  picker.classList.toggle('hidden');
-  const btn = document.querySelector('.input-emoji-btn');
-  const rect = btn.getBoundingClientRect();
-  picker.style.left = rect.left + 'px';
-  picker.style.top = (rect.top - 200) + 'px';
+function onDMKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendDM(); }
 }
 
-function insertEmoji(emoji) {
-  const input = document.getElementById('message-input');
-  input.value += emoji;
-  input.focus();
-  document.getElementById('emoji-picker').classList.add('hidden');
+function showTyping(username, barId) { document.getElementById(barId).textContent = `${username} is typing…`; }
+function clearTyping(barId) { document.getElementById(barId).textContent = ''; }
+
+// ── Home / Friends ─────────────────────────────────────────────────────────────
+function showHome() {
+  document.getElementById('homeView').style.display = 'flex';
+  document.getElementById('channelView').style.display = 'none';
+  document.getElementById('dmView').style.display = 'none';
+  document.querySelectorAll('.server-icon').forEach(el => el.classList.remove('active'));
+  document.getElementById('homeBtn').classList.add('active');
+  document.getElementById('serverName').textContent = 'Home';
+  document.getElementById('channelList').innerHTML = '';
+  currentChannel = null; currentServer = null;
 }
 
-async function reactToMsg(emoji) {
-  document.getElementById('emoji-picker').classList.add('hidden');
-  if (!emojiTargetMsgId) return;
-  await fetch(`/api/channels/${currentChannelId}/messages/${emojiTargetMsgId}/react`, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({ emoji }), credentials:'include',
+async function showHomeTab(tab, btn) {
+  document.querySelectorAll('.home-tab').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const container = document.getElementById('homeContent');
+  container.innerHTML = '';
+  if (tab === 'friends') await renderFriends(container);
+  else if (tab === 'requests') await renderRequests(container);
+  else if (tab === 'dms') await renderDMList(container);
+}
+
+async function renderFriends(el) {
+  const r = await api('/api/friends');
+  const friends = await r.json();
+  const addBtn = `<button class="add-friend-btn" onclick="showModal('addFriendModal')">+ Add Friend</button>`;
+  if (!friends.length) { el.innerHTML = `<div class="empty-state"><div class="icon">👥</div><div>No friends yet</div>${addBtn}</div>`; return; }
+  el.innerHTML = addBtn + '<div style="height:12px"></div>';
+  friends.forEach(f => {
+    const div = document.createElement('div');
+    div.className = 'friend-card';
+    div.innerHTML = `
+      <div class="friend-avatar">
+        ${f.avatar ? `<img src="${f.avatar}" alt="">` : f.username[0].toUpperCase()}
+        <span class="status-dot status-${f.status || 'offline'}" data-uid="${f.id}"></span>
+      </div>
+      <div><div class="friend-name">${esc(f.display_name||f.username)}</div><div class="friend-sub">${f.status||'offline'}</div></div>
+      <div class="friend-actions">
+        <button class="action-btn" title="Send DM" onclick="openDM(${f.id})">💬</button>
+        <button class="action-btn danger" title="Remove friend" onclick="removeFriend(${f.id})">✖</button>
+      </div>`;
+    el.appendChild(div);
   });
 }
 
-function updateReaction(messageId, userId, emoji, add) {
-  const container = document.getElementById(`reactions-${messageId}`);
-  if (!container) return;
-  let badge = container.querySelector(`[data-emoji="${emoji}"]`);
-  if (add) {
-    if (!badge) {
-      badge = document.createElement('div');
-      badge.className = 'reaction-badge';
-      badge.setAttribute('data-emoji', emoji);
-      badge.setAttribute('data-count', '0');
-      badge.onclick = () => reactToMsg(emoji);
-      container.appendChild(badge);
-    }
-    const count = parseInt(badge.getAttribute('data-count') || '0') + 1;
-    badge.setAttribute('data-count', count);
-    badge.innerHTML = `${emoji} ${count}`;
-    if (userId === me.id) badge.classList.add('mine');
-  } else if (badge) {
-    const count = parseInt(badge.getAttribute('data-count') || '1') - 1;
-    if (count <= 0) badge.remove();
-    else { badge.setAttribute('data-count', count); badge.innerHTML = `${emoji} ${count}`; }
-    if (userId === me.id) badge.classList.remove('mine');
+async function renderRequests(el) {
+  const r = await api('/api/friends/requests');
+  const { incoming, outgoing } = await r.json();
+  if (!incoming.length && !outgoing.length) { el.innerHTML = `<div class="empty-state"><div class="icon">📬</div><div>No pending requests</div></div>`; return; }
+  if (incoming.length) {
+    el.innerHTML += '<div style="font-size:13px;font-weight:600;color:#96989d;margin-bottom:8px">INCOMING</div>';
+    incoming.forEach(req => {
+      const div = document.createElement('div');
+      div.className = 'friend-card';
+      div.innerHTML = `
+        <div class="friend-avatar">${req.avatar ? `<img src="${req.avatar}" alt="">` : req.username[0].toUpperCase()}</div>
+        <div><div class="friend-name">${esc(req.display_name||req.username)}</div></div>
+        <div class="friend-actions">
+          <button class="action-btn success" title="Accept" onclick="acceptFriendReq(${req.id})">✓</button>
+          <button class="action-btn danger" title="Decline" onclick="declineFriendReq(${req.id})">✖</button>
+        </div>`;
+      el.appendChild(div);
+    });
+  }
+  if (outgoing.length) {
+    const header = document.createElement('div');
+    header.innerHTML = '<div style="font-size:13px;font-weight:600;color:#96989d;margin:12px 0 8px">OUTGOING</div>';
+    el.appendChild(header);
+    outgoing.forEach(req => {
+      const div = document.createElement('div');
+      div.className = 'friend-card';
+      div.innerHTML = `
+        <div class="friend-avatar">${req.avatar ? `<img src="${req.avatar}" alt="">` : req.username[0].toUpperCase()}</div>
+        <div><div class="friend-name">${esc(req.display_name||req.username)}</div><div class="friend-sub">Pending…</div></div>`;
+      el.appendChild(div);
+    });
   }
 }
 
-function renderReactions(msgId, reactions) {
-  if (!reactions) return;
-  const container = document.getElementById(`reactions-${msgId}`);
-  if (!container) return;
-  for (const r of reactions) {
-    const badge = document.createElement('div');
-    badge.className = 'reaction-badge' + (r.me ? ' mine' : '');
-    badge.setAttribute('data-emoji', r.emoji);
-    badge.setAttribute('data-count', r.count);
-    badge.innerHTML = `${r.emoji} ${r.count}`;
-    badge.onclick = () => reactToMsg(r.emoji);
-    container.appendChild(badge);
+async function acceptFriendReq(id) {
+  const r = await api(`/api/friends/requests/${id}/accept`, { method: 'POST' });
+  if (r.ok) { toast('Friend request accepted!', 'success'); showHomeTab('requests', null); }
+}
+async function declineFriendReq(id) {
+  await api(`/api/friends/requests/${id}/decline`, { method: 'POST' });
+  showHomeTab('requests', null);
+}
+async function removeFriend(id) {
+  if (!confirm('Remove this friend?')) return;
+  await api(`/api/friends/${id}`, { method: 'DELETE' });
+  showHomeTab('friends', null);
+}
+
+// ── DMs ────────────────────────────────────────────────────────────────────────
+async function renderDMList(el) {
+  const r = await api('/api/dms');
+  const dms = await r.json();
+  if (!dms.length) { el.innerHTML = `<div class="empty-state"><div class="icon">💬</div><div>No DMs yet. Add a friend and message them!</div></div>`; return; }
+  dms.forEach(dm => {
+    const div = document.createElement('div');
+    div.className = 'friend-card';
+    div.innerHTML = `
+      <div class="friend-avatar">
+        ${dm.avatar ? `<img src="${dm.avatar}" alt="">` : dm.username[0].toUpperCase()}
+        <span class="status-dot status-${dm.status||'offline'}" data-uid="${dm.id}"></span>
+      </div>
+      <div><div class="friend-name">${esc(dm.display_name||dm.username)}</div><div class="friend-sub" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px">${esc(dm.last_message||'')}</div></div>`;
+    div.onclick = () => openDM(dm.id, dm.dm_channel_id);
+    el.appendChild(div);
+  });
+}
+
+async function openDM(userId, existingChannelId) {
+  let dmChannelId = existingChannelId;
+  let user;
+  if (!dmChannelId) {
+    const r = await api('/api/dms/open', { method: 'POST', body: JSON.stringify({ userId }) });
+    if (!r.ok) { toast('Failed to open DM', 'error'); return; }
+    const d = await r.json();
+    dmChannelId = d.dmChannelId;
+    user = d.user;
   }
+  if (!user) {
+    const r = await api(`/api/users/${userId}`);
+    user = await r.json();
+  }
+  currentDM = { channelId: dmChannelId, user };
+  currentChannel = null;
+  document.getElementById('homeView').style.display = 'none';
+  document.getElementById('channelView').style.display = 'none';
+  document.getElementById('dmView').style.display = 'flex';
+  document.getElementById('dmHeaderName').textContent = '💬 ' + (user.display_name || user.username);
+  if (socket) socket.emit('dm:join', dmChannelId);
+  await loadDMMessages(dmChannelId);
+  closeModal('addFriendModal');
 }
 
-// ─── Profile Panel ─────────────────────────────────────────────────────────────
-async function showProfile(userId, e) {
-  e?.stopPropagation();
-  const panel = document.getElementById('profile-panel');
-  const res = await fetch(`/api/users/${userId}`, { credentials:'include' });
-  if (!res.ok) return;
-  const user = await res.json();
-  const isMe = user.id === me.id;
-  const isFriend = !isMe;
-  const bannerStyle = user.banner ? `background-image:url(${user.banner});background-size:cover;background-position:center` : `background:linear-gradient(135deg,${strToColor(user.username)},${strToColor(user.username+'2')})`;
-  const avatarHtml = user.avatar
-    ? `<img src="${user.avatar}" class="avatar" width="72" height="72" style="border:4px solid var(--bg-primary)">`
-    : `<div class="avatar-placeholder" style="width:72px;height:72px;font-size:28px;border:4px solid var(--bg-primary);background:${strToColor(user.username)}">${user.username.charAt(0).toUpperCase()}</div>`;
-  const badges = [
-    user.badge_admin ? '<span class="badge badge-admin">ADMIN</span>' : '',
-    user.badge_gold ? '<span class="badge badge-gold">GOLD</span>' : '',
-    user.badge_rail ? '<span class="badge badge-rail">RAIL</span>' : '',
-    user.badge_blue ? '<span class="badge badge-blue">✓</span>' : '',
-  ].join('');
-  const level = Math.floor(user.xp / 100) + 1;
-  const xpProgress = user.xp % 100;
-
-  panel.innerHTML = `
-    <div class="profile-banner" style="${bannerStyle}"></div>
-    <div class="profile-avatar-wrap">${avatarHtml}</div>
-    <div class="profile-body">
-      <div class="profile-name" style="color:${user.name_color || '#dcddde'}">${escHtml(user.display_name || user.username)}</div>
-      <div class="profile-username">@${escHtml(user.username)}${badges}</div>
-      ${user.bio ? `<div class="profile-bio">${escHtml(user.bio)}</div>` : ''}
-      <div class="profile-stats">
-        <div class="profile-stat"><div class="profile-stat-value">${user.points || 0}</div><div class="profile-stat-label">Points</div></div>
-        <div class="profile-stat"><div class="profile-stat-value">${level}</div><div class="profile-stat-label">Level</div></div>
-        <div class="profile-stat"><div class="profile-stat-value">${user.friend_count || 0}</div><div class="profile-stat-label">Friends</div></div>
-      </div>
-      <div style="margin-bottom:12px">
-        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-muted);margin-bottom:4px"><span>XP: ${user.xp % 100}/100</span><span>Lv ${level}</span></div>
-        <div style="height:6px;background:var(--bg-surface);border-radius:3px"><div style="height:100%;width:${xpProgress}%;background:var(--accent);border-radius:3px;transition:width 0.3s"></div></div>
-      </div>
-      <div class="profile-actions">
-        ${isMe ? `<button class="btn-primary" onclick="openSettings()">Edit Profile</button>` : `
-          <button class="btn-primary" onclick="startDmWithUser(${user.id});closeProfilePanel()">Message</button>
-          <button class="btn-ghost" onclick="sendFriendRequest(${user.id})">Add Friend</button>
-          ${me.is_admin ? `<button class="btn-danger" onclick="showAdminActions(${user.id},'${escHtml(user.username)}')">Admin</button>` : ''}
-        `}
-      </div>
-    </div>`;
-
-  panel.classList.remove('hidden');
-  // Position near click
-  const x = e?.clientX || window.innerWidth / 2;
-  const y = e?.clientY || window.innerHeight / 2;
-  panel.style.left = Math.min(x + 10, window.innerWidth - 340) + 'px';
-  panel.style.top = Math.min(y - 20, window.innerHeight - 500) + 'px';
-  setTimeout(() => document.addEventListener('click', closeProfilePanel, { once: true }), 100);
+async function loadDMMessages(dmId) {
+  const container = document.getElementById('dmMessages');
+  container.innerHTML = '';
+  const r = await api(`/api/dms/${dmId}/messages`);
+  if (!r.ok) return;
+  const msgs = await r.json();
+  msgs.forEach(m => appendMessage(m, container, false));
+  container.scrollTop = container.scrollHeight;
 }
 
-function closeProfilePanel() {
-  document.getElementById('profile-panel').classList.add('hidden');
+async function sendDM() {
+  const input = document.getElementById('dmInput');
+  const content = input.value.trim();
+  if (!content || !currentDM) return;
+  input.value = '';
+  const r = await api(`/api/dms/${currentDM.channelId}/messages`, { method: 'POST', body: JSON.stringify({ content }) });
+  if (!r.ok) { const d = await r.json(); toast(d.error || 'Failed to send', 'error'); }
 }
 
-async function startDmWithUser(userId) {
-  const res = await fetch('/api/dms/open', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId}), credentials:'include' });
-  const d = await res.json();
-  showHome();
-  setTimeout(() => openDm(d.dmChannelId, d.user), 300);
+// ── Search users (friend add) ──────────────────────────────────────────────────
+let searchTimer;
+async function searchUsers(q, containerId) {
+  clearTimeout(searchTimer);
+  const el = document.getElementById(containerId);
+  if (q.length < 2) { el.innerHTML = ''; return; }
+  searchTimer = setTimeout(async () => {
+    const r = await api(`/api/users/search?q=${encodeURIComponent(q)}`);
+    const users = await r.json();
+    el.innerHTML = '';
+    if (!users.length) { el.innerHTML = '<div style="color:#96989d;font-size:14px;padding:8px 0">No users found</div>'; return; }
+    users.forEach(u => {
+      const div = document.createElement('div');
+      div.className = 'friend-card';
+      div.style.cursor = 'pointer';
+      div.innerHTML = `
+        <div class="friend-avatar">${u.avatar ? `<img src="${u.avatar}" alt="">` : u.username[0].toUpperCase()}</div>
+        <div><div class="friend-name">${esc(u.display_name||u.username)}</div></div>
+        <div class="friend-actions">
+          <button class="action-btn success" onclick="sendFriendReq(${u.id})" title="Add Friend">+</button>
+          <button class="action-btn" onclick="openDM(${u.id})" title="Message">💬</button>
+        </div>`;
+      el.appendChild(div);
+    });
+  }, 350);
 }
 
-async function sendFriendRequest(userId) {
-  const res = await fetch('/api/friends/request', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId}), credentials:'include' });
-  const d = await res.json();
-  toast(d.message || d.error || 'Done', res.ok ? 'success' : 'error');
+async function sendFriendReq(userId) {
+  const r = await api('/api/friends/request', { method: 'POST', body: JSON.stringify({ userId }) });
+  const d = await r.json();
+  toast(r.ok ? d.message : d.error, r.ok ? 'success' : 'error');
 }
 
-// ─── User search ───────────────────────────────────────────────────────────────
-let searchTimeout;
-async function searchUsers() {
-  const q = document.getElementById('search-input').value;
-  clearTimeout(searchTimeout);
-  if (q.length < 2) { document.getElementById('search-results').innerHTML = ''; return; }
-  searchTimeout = setTimeout(async () => {
-    const res = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`, { credentials:'include' });
-    const users = await res.json();
-    const results = document.getElementById('search-results');
-    if (!users.length) { results.innerHTML = '<div style="padding:16px;color:var(--text-muted);text-align:center">No users found</div>'; return; }
-    results.innerHTML = users.map(u => `
-      <div class="member-item" style="padding:10px 8px;cursor:pointer" onclick="showProfile(${u.id});closeModal('modal-search')">
-        ${u.avatar ? `<img src="${u.avatar}" class="avatar" width="36" height="36">` : `<div class="avatar-placeholder" style="width:36px;height:36px;font-size:14px;background:${strToColor(u.username)}">${u.username.charAt(0).toUpperCase()}</div>`}
-        <div>
-          <div style="font-weight:600">${escHtml(u.display_name || u.username)}</div>
-          <div style="font-size:12px;color:var(--text-muted)">@${escHtml(u.username)}</div>
-        </div>
-      </div>
-    `).join('');
-  }, 300);
-}
-
-// ─── Member list ───────────────────────────────────────────────────────────────
-function renderMemberList(members) {
-  const list = document.getElementById('member-list');
-  const online = members.filter(m => m.status !== 'invisible' && m.status !== 'offline');
-  const offline = members.filter(m => m.status === 'invisible' || m.status === 'offline');
-  list.innerHTML = `
-    <div class="member-group-header">Online — ${online.length}</div>
-    ${online.map(m => memberItemHtml(m)).join('')}
-    ${offline.length ? `<div class="member-group-header" style="margin-top:16px">Offline — ${offline.length}</div>${offline.map(m => memberItemHtml(m)).join('')}` : ''}
-  `;
-}
-
-function memberItemHtml(m) {
-  const avatarHtml = m.avatar
-    ? `<img src="${m.avatar}" class="avatar" width="32" height="32">`
-    : `<div class="avatar-placeholder" style="width:32px;height:32px;font-size:13px;background:${strToColor(m.username)}">${m.username.charAt(0).toUpperCase()}</div>`;
-  const crown = m.role === 'owner' ? '<span class="member-role-crown">👑</span>' : m.role === 'admin' ? '<span class="member-role-crown" style="color:var(--danger)">🛡</span>' : '';
-  return `<div class="member-item" data-user-id="${m.id}" onclick="showProfile(${m.id}, event)">
-    <div style="position:relative">${avatarHtml}<div class="status-dot status-${m.status}" style="position:absolute;bottom:-1px;right:-1px"></div></div>
-    <div><div class="member-name">${escHtml(m.display_name || m.nickname || m.username)}${crown}</div></div>
-  </div>`;
-}
-
-function toggleMemberList() {
-  const list = document.getElementById('member-list');
-  memberListVisible = !memberListVisible;
-  list.style.display = memberListVisible ? 'block' : 'none';
-}
-
-// ─── Create / Join server ──────────────────────────────────────────────────────
+// ── Server CRUD ────────────────────────────────────────────────────────────────
 async function createServer() {
-  const name = document.getElementById('new-server-name').value.trim();
-  const desc = document.getElementById('new-server-desc').value.trim();
-  if (!name) { toast('Server name required', 'error'); return; }
-  const res = await fetch('/api/servers', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,description:desc}), credentials:'include' });
-  const s = await res.json();
-  if (!res.ok) { toast(s.error || 'Failed to create server', 'error'); return; }
-  closeModal('modal-create-server');
-  document.getElementById('new-server-name').value = '';
-  document.getElementById('new-server-desc').value = '';
-  servers.push(s);
-  renderServerDock();
-  selectServer(s.id);
-  toast(`Server "${s.name}" created!`, 'success');
+  const name = document.getElementById('newServerName').value.trim();
+  if (!name) return;
+  const desc = document.getElementById('newServerDesc').value.trim();
+  const r = await api('/api/servers', { method: 'POST', body: JSON.stringify({ name, description: desc }) });
+  if (!r.ok) { const d = await r.json(); toast(d.error || 'Failed', 'error'); return; }
+  const server = await r.json();
+  closeModal('createServerModal');
+  await loadServers();
+  openServer(server.id);
 }
 
 async function joinServer() {
-  const code = document.getElementById('join-invite-code').value.trim();
-  if (!code) { toast('Invite code required', 'error'); return; }
-  const res = await fetch('/api/servers/join', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({inviteCode:code}), credentials:'include' });
-  const s = await res.json();
-  if (!res.ok) { toast(s.error || 'Failed to join server', 'error'); return; }
-  closeModal('modal-join-server');
-  servers.push(s);
-  renderServerDock();
-  selectServer(s.id);
-  toast(`Joined "${s.name}"!`, 'success');
+  const code = document.getElementById('joinCode').value.trim();
+  if (!code) return;
+  const r = await api('/api/servers/join', { method: 'POST', body: JSON.stringify({ inviteCode: code }) });
+  if (!r.ok) { const d = await r.json(); toast(d.error || 'Failed', 'error'); return; }
+  const server = await r.json();
+  closeModal('joinServerModal');
+  await loadServers();
+  openServer(server.id);
 }
 
-async function createChannel() {
-  const name = document.getElementById('new-channel-name').value.trim();
-  const type = document.getElementById('new-channel-type').value;
-  if (!name || !currentServerId) return;
-  const res = await fetch(`/api/servers/${currentServerId}/channels`, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name,type}), credentials:'include',
-  });
-  const ch = await res.json();
-  if (!res.ok) { toast(ch.error || 'Failed to create channel', 'error'); return; }
-  closeModal('modal-create-channel');
-  await selectServer(currentServerId);
-  toast(`Channel #${ch.name} created!`, 'success');
-}
-
-// ─── Settings ──────────────────────────────────────────────────────────────────
-function openSettings() {
-  document.getElementById('settings-overlay').classList.remove('hidden');
-  showSettingsPage('profile');
-}
-function closeSettings() {
-  document.getElementById('settings-overlay').classList.add('hidden');
-}
-
-async function showSettingsPage(page) {
-  document.querySelectorAll('.settings-nav-item').forEach(i => i.classList.remove('active'));
-  const content = document.getElementById('settings-content');
-
-  if (page === 'profile') {
-    const r = await fetch('/auth/me', { credentials:'include' });
-    const user = await r.json();
-    content.innerHTML = `
-      <h2>My Account</h2>
-      <div class="settings-section">
-        <div style="display:flex;gap:24px;align-items:flex-start;margin-bottom:24px">
-          <div style="text-align:center">
-            ${user.avatar ? `<img src="${user.avatar}" class="avatar" width="80" height="80">` : `<div class="avatar-placeholder" style="width:80px;height:80px;font-size:32px;margin:0 auto;background:${strToColor(user.username)}">${user.username.charAt(0).toUpperCase()}</div>`}
-            <label class="btn-ghost" style="display:inline-block;margin-top:8px;font-size:12px;cursor:pointer">
-              Change Avatar <input type="file" accept="image/*" style="display:none" onchange="uploadAvatar(this)">
-            </label>
-          </div>
-          <div style="flex:1">
-            <div class="field-group"><label>DISPLAY NAME</label><input type="text" id="s-display-name" value="${escHtml(user.display_name||'')}"></div>
-            <div class="field-group"><label>USERNAME</label><input type="text" id="s-username" value="${escHtml(user.username)}"></div>
-          </div>
-        </div>
-        <div class="field-group"><label>BIO</label><textarea id="s-bio" rows="3" style="width:100%;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--text-normal);font-size:15px;resize:none;outline:none">${escHtml(user.bio||'')}</textarea></div>
-        <div class="field-group"><label>STATUS</label>
-          <select id="s-status" style="width:100%;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--text-normal)">
-            <option value="online" ${user.status==='online'?'selected':''}>Online</option>
-            <option value="idle" ${user.status==='idle'?'selected':''}>Idle</option>
-            <option value="dnd" ${user.status==='dnd'?'selected':''}>Do Not Disturb</option>
-            <option value="invisible" ${user.status==='invisible'?'selected':''}>Invisible</option>
-          </select>
-        </div>
-        <button class="btn-primary" onclick="saveProfile()">Save Changes</button>
-      </div>
-      <div class="settings-section">
-        <h3>Change Password</h3>
-        <div class="field-group"><label>CURRENT PASSWORD</label><input type="password" id="s-cur-pass"></div>
-        <div class="field-group"><label>NEW PASSWORD</label><input type="password" id="s-new-pass"></div>
-        <button class="btn-primary" onclick="changePassword()">Update Password</button>
-      </div>
-      <div class="settings-section">
-        <h3>Email</h3>
-        <p style="font-size:14px;color:var(--text-muted);margin-bottom:12px">${user.email} — ${user.email_verified ? '✅ Verified' : '⚠️ Not verified'}</p>
-        ${!user.email_verified ? `<button class="btn-ghost" onclick="resendVerification()" style="margin-bottom:12px">Resend Verification Email</button>` : ''}
-        <div class="field-group"><label>NEW EMAIL</label><input type="email" id="s-new-email" placeholder="New email address"></div>
-        <div class="field-group"><label>CURRENT PASSWORD</label><input type="password" id="s-email-pass" placeholder="Required to change email"></div>
-        <button class="btn-ghost" onclick="changeEmail()">Request Email Change</button>
-      </div>
-    `;
-  } else if (page === 'store') {
-    const r = await fetch('/api/store', { credentials:'include' });
-    const { points, items } = await r.json();
-    content.innerHTML = `
-      <h2>Store</h2>
-      <div style="margin-bottom:24px;padding:16px;background:var(--bg-secondary);border-radius:12px;display:flex;align-items:center;gap:12px">
-        <span style="font-size:32px">💎</span>
-        <div><div style="font-size:24px;font-weight:800">${points}</div><div style="font-size:13px;color:var(--text-muted)">Points</div></div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px">
-        ${items.map(i => `
-          <div style="background:var(--bg-secondary);border-radius:12px;padding:16px;border:1px solid ${i.owned?'var(--accent)':'var(--border)'}">
-            <div style="font-size:15px;font-weight:700;margin-bottom:4px">${escHtml(i.name)}</div>
-            <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px">${escHtml(i.description)}</div>
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span style="font-weight:700;color:var(--accent)">💎 ${i.cost}</span>
-              ${i.owned ? '<span style="color:var(--success);font-size:13px">✓ Owned</span>' : `<button class="btn-primary" style="font-size:13px;padding:6px 14px" onclick="buyItem('${i.id}','${escHtml(i.name)}',${i.cost})">Buy</button>`}
-            </div>
-          </div>
-        `).join('')}
-      </div>
-    `;
-  } else if (page === 'sessions') {
-    const r = await fetch('/api/users/me/sessions', { credentials:'include' });
-    const sessions = await r.json();
-    content.innerHTML = `
-      <h2>Active Sessions</h2>
-      <p style="color:var(--text-muted);margin-bottom:24px">Manage all devices where you're signed in.</p>
-      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:24px">
-        ${sessions.map(s => `
-          <div style="background:var(--bg-secondary);border-radius:8px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border:1px solid ${s.current?'var(--accent)':'var(--border)'}">
-            <div>
-              <div style="font-weight:600">${s.current ? '🖥 This device' : '📱 Other device'}</div>
-              <div style="font-size:12px;color:var(--text-muted)">Expires: ${new Date(s.expires).toLocaleDateString()}</div>
-            </div>
-            ${s.current ? '<span style="color:var(--success);font-size:13px">Current</span>' : ''}
-          </div>
-        `).join('')}
-      </div>
-      <button class="btn-danger" onclick="logoutAll()">Log Out All Devices</button>
-    `;
-  } else if (page === 'appearance') {
-    content.innerHTML = `
-      <h2>Appearance</h2>
-      <div class="settings-section">
-        <h3>Theme</h3>
-        <p style="color:var(--text-muted);font-size:14px">Purchase themes in the Store to customize your appearance.</p>
-      </div>
-    `;
+// ── Profile modal ──────────────────────────────────────────────────────────────
+async function showUserProfile(userId) {
+  const r = await api(`/api/users/${userId}`);
+  if (!r.ok) return;
+  const user = await r.json();
+  const modal = document.getElementById('profileModal');
+  const isMe = userId === me.id;
+  document.getElementById('profileBanner').style.background = user.banner ? `url(${user.banner}) center/cover` : 'linear-gradient(135deg,#5865f2,#eb459e)';
+  document.getElementById('profileAvatar').innerHTML = user.avatar ? `<img src="${user.avatar}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">` : user.username[0].toUpperCase();
+  const nameStyle = user.name_color ? `style="color:${user.name_color}"` : '';
+  document.getElementById('profileUsername').innerHTML = `<span ${nameStyle}>${esc(user.display_name||user.username)}</span> <span style="color:#96989d;font-size:14px;font-weight:400">${esc(user.username)}</span>`;
+  document.getElementById('profileBadges').innerHTML = renderBadges(user);
+  document.getElementById('profileBio').textContent = user.bio || '';
+  document.getElementById('profileStats').innerHTML = `<div>Lv.${user.level}</div><div>${user.points} pts</div><div>${user.xp} xp</div>`;
+  const actions = document.getElementById('profileActions');
+  if (isMe) {
+    actions.innerHTML = `<button class="btn-primary" onclick="showSettings()">Edit Profile</button>`;
+  } else {
+    actions.innerHTML = `
+      <button class="btn-primary" style="margin-right:8px" onclick="openDM(${userId});closeModal('profileModal')">Message</button>
+      <button class="btn-secondary" onclick="sendFriendReq(${userId})">Add Friend</button>`;
   }
+  showModal('profileModal');
+}
+
+// ── Settings ───────────────────────────────────────────────────────────────────
+function showSettings() { showModal('settingsModal'); showSettingsTab('account', document.querySelector('.settings-tab')); }
+
+function showSettingsTab(tab, btn) {
+  document.querySelectorAll('.settings-tab').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const body = document.getElementById('settingsBody');
+  if (tab === 'account') {
+    body.innerHTML = `
+      <div class="settings-section"><h3>Account</h3>
+        <div class="settings-info">Username: <strong>${esc(me.username)}</strong></div>
+        <div class="settings-info">Email: <strong>${esc(me.email)}</strong></div>
+      </div>
+      <div class="settings-section"><h3>Change Username</h3>
+        <div class="field"><input id="newUsername" placeholder="New username" value="${esc(me.username)}"></div>
+        <button class="settings-save" onclick="saveUsername()">Save Username</button>
+      </div>
+      <div class="settings-section"><h3>Change Password</h3>
+        <div class="field"><input type="password" id="curPwd" placeholder="Current password"></div>
+        <div class="field"><input type="password" id="newPwd" placeholder="New password (min 8 chars)"></div>
+        <button class="settings-save" onclick="changePassword()">Update Password</button>
+      </div>
+      <div class="settings-section"><h3>Danger Zone</h3>
+        <button class="btn-danger" onclick="if(confirm('Log out of all devices?')) logoutAll()">Log Out Everywhere</button>
+      </div>`;
+  } else if (tab === 'profile') {
+    body.innerHTML = `
+      <div class="settings-section"><h3>Display Name</h3>
+        <div class="field"><input id="displayName" placeholder="Display name" value="${esc(me.display_name||'')}"></div>
+      </div>
+      <div class="settings-section"><h3>Bio</h3>
+        <div class="field"><textarea id="bio" rows="3" placeholder="Write something about yourself…" maxlength="500">${esc(me.bio||'')}</textarea></div>
+      </div>
+      <div class="settings-section"><h3>Avatar</h3>
+        <input type="file" id="avatarFile" accept="image/*" style="display:none" onchange="uploadAvatar(event)">
+        <button class="settings-btn" onclick="document.getElementById('avatarFile').click()">Upload Avatar</button>
+      </div>
+      <div class="settings-section"><h3>Profile Banner</h3>
+        <input type="file" id="bannerFile" accept="image/*" style="display:none" onchange="uploadBanner(event)">
+        <button class="settings-btn" onclick="document.getElementById('bannerFile').click()">Upload Banner</button>
+      </div>
+      <button class="settings-save" onclick="saveProfile()">Save Changes</button>`;
+  } else if (tab === 'privacy') {
+    body.innerHTML = `
+      <div class="settings-section"><h3>Status</h3>
+        <div class="field"><select id="statusSelect" onchange="setStatus(this.value)">
+          <option value="online" ${me.status==='online'?'selected':''}>Online</option>
+          <option value="idle" ${me.status==='idle'?'selected':''}>Idle</option>
+          <option value="dnd" ${me.status==='dnd'?'selected':''}>Do Not Disturb</option>
+          <option value="invisible" ${me.status==='invisible'?'selected':''}>Invisible</option>
+        </select></div>
+      </div>
+      <div class="settings-section"><h3>My Store Items</h3>
+        <div style="font-size:14px;color:#96989d">Theme: <strong>${me.theme||'default'}</strong></div>
+        <div style="font-size:14px;color:#96989d;margin-top:8px">Name Color: ${me.name_color ? `<span style="color:${me.name_color}">${me.name_color}</span>` : 'None'}</div>
+        <div style="font-size:14px;color:#96989d;margin-top:8px">Chat Effect: <strong>${me.chat_effect||'None'}</strong></div>
+        <button class="settings-btn" style="margin-top:12px" onclick="openStore();closeModal('settingsModal')">Go to Store</button>
+      </div>`;
+  }
+}
+
+async function saveUsername() {
+  const username = document.getElementById('newUsername').value.trim();
+  if (!username) return;
+  const r = await api('/api/users/me', { method: 'PUT', body: JSON.stringify({ username }) });
+  if (r.ok) { const d = await r.json(); me.username = d.username; toast('Username updated!', 'success'); }
+  else { const d = await r.json(); toast(d.error || 'Failed', 'error'); }
 }
 
 async function saveProfile() {
-  const body = {
-    displayName: document.getElementById('s-display-name').value,
-    bio: document.getElementById('s-bio').value,
-    status: document.getElementById('s-status').value,
-    username: document.getElementById('s-username').value,
-  };
-  const res = await fetch('/api/users/me', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), credentials:'include' });
-  const d = await res.json();
-  if (!res.ok) { toast(d.errors?.[0]?.msg || d.error || 'Failed to save', 'error'); return; }
-  toast('Profile saved!', 'success');
-  me = { ...me, ...d };
-  renderProfileBar();
-  socket.emit('status:set', body.status);
+  const displayName = document.getElementById('displayName').value.trim();
+  const bio = document.getElementById('bio').value.trim();
+  const r = await api('/api/users/me', { method: 'PUT', body: JSON.stringify({ displayName, bio }) });
+  if (r.ok) { me.display_name = displayName; me.bio = bio; renderSelf(); toast('Profile saved!', 'success'); }
+  else { const d = await r.json(); toast(d.error || 'Failed', 'error'); }
 }
 
 async function changePassword() {
-  const cur = document.getElementById('s-cur-pass').value;
-  const nw = document.getElementById('s-new-pass').value;
-  if (!cur || !nw) { toast('Fill in both fields', 'error'); return; }
-  const res = await fetch('/api/users/me/change-password', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({currentPassword:cur,newPassword:nw}), credentials:'include' });
-  const d = await res.json();
-  toast(res.ok ? 'Password changed!' : (d.error||'Failed'), res.ok ? 'success' : 'error');
+  const curPwd = document.getElementById('curPwd').value;
+  const newPwd = document.getElementById('newPwd').value;
+  if (!curPwd || newPwd.length < 8) { toast('New password must be at least 8 chars', 'error'); return; }
+  const r = await api('/api/users/me/change-password', { method: 'POST', body: JSON.stringify({ currentPassword: curPwd, newPassword: newPwd }) });
+  const d = await r.json();
+  toast(r.ok ? 'Password updated!' : d.error || 'Failed', r.ok ? 'success' : 'error');
 }
 
-async function changeEmail() {
-  const newEmail = document.getElementById('s-new-email').value;
-  const pass = document.getElementById('s-email-pass').value;
-  const res = await fetch('/auth/change-email', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({newEmail,password:pass}), credentials:'include' });
-  const d = await res.json();
-  toast(res.ok ? d.message : (d.error||'Failed'), res.ok ? 'success' : 'error');
+async function setStatus(status) {
+  socket?.emit('status:set', status);
+  me.status = status;
 }
 
-async function uploadAvatar(input) {
-  const file = input.files[0];
+async function uploadAvatar(e) {
+  const file = e.target.files[0];
   if (!file) return;
-  const formData = new FormData();
-  formData.append('avatar', file);
-  const res = await fetch('/api/users/me/avatar', { method:'POST', body:formData, credentials:'include' });
-  const d = await res.json();
-  if (res.ok) { me.avatar = d.avatar; renderProfileBar(); showSettingsPage('profile'); toast('Avatar updated!', 'success'); }
-  else toast(d.error||'Failed to upload avatar', 'error');
+  const fd = new FormData(); fd.append('avatar', file);
+  const r = await fetch('/api/users/me/avatar', { method: 'POST', body: fd, credentials: 'include' });
+  if (r.ok) { const d = await r.json(); me.avatar = d.avatar; renderSelf(); toast('Avatar updated!', 'success'); }
+  else toast('Upload failed', 'error');
 }
 
-async function buyItem(id, name, cost) {
-  if (!confirm(`Buy "${name}" for ${cost} points?`)) return;
-  const res = await fetch('/api/store/buy', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({itemId:id}), credentials:'include' });
-  const d = await res.json();
-  toast(res.ok ? d.message : (d.error||'Purchase failed'), res.ok ? 'success' : 'error');
-  if (res.ok) showSettingsPage('store');
+async function uploadBanner(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const fd = new FormData(); fd.append('banner', file);
+  const r = await fetch('/api/users/me/banner', { method: 'POST', body: fd, credentials: 'include' });
+  if (r.ok) { me.banner = (await r.json()).banner; toast('Banner updated!', 'success'); }
+  else toast('Upload failed', 'error');
 }
 
-async function logoutAll() {
-  if (!confirm('Log out of all devices?')) return;
-  const res = await fetch('/auth/logout-all', { method:'POST', credentials:'include' });
-  if (res.ok) location.href = '/login.html';
+// ── Store ──────────────────────────────────────────────────────────────────────
+async function openStore() {
+  showModal('storeModal');
+  await loadStore();
 }
 
-// ─── Admin actions ─────────────────────────────────────────────────────────────
-function showAdminActions(userId, username) {
-  const reason = prompt(`Admin action for @${username}. Enter action:\n- ban:reason\n- kick:serverId\n- timeout:serverId:minutes\n- grant_badge:blue|gold|rail|admin\n- remove_badge:blue|gold|rail|admin\n- points:+/-N\n- reset_xp`);
+async function loadStore() {
+  const r = await api('/api/store');
+  if (!r.ok) { toast('Failed to load store', 'error'); return; }
+  storeData = await r.json();
+  document.getElementById('storePoints').textContent = `💰 Your Points: ${storeData.points}`;
+  renderStoreGrid('all');
+}
+
+function filterStore(type, btn) {
+  document.querySelectorAll('.store-tab').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  renderStoreGrid(type);
+}
+
+function renderStoreGrid(filter) {
+  if (!storeData) return;
+  const grid = document.getElementById('storeGrid');
+  grid.innerHTML = '';
+  // Deduplicate by id just to be safe
+  const seen = new Set();
+  const items = storeData.items.filter(item => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return filter === 'all' || item.type === filter;
+  });
+  if (!items.length) { grid.innerHTML = '<div style="color:#96989d;font-size:14px;padding:16px;grid-column:1/-1">No items in this category</div>'; return; }
+  items.forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'store-card' + (item.owned ? ' owned' : '');
+    card.innerHTML = `
+      <div class="store-icon">${item.icon || '📦'}</div>
+      <div class="store-name">${esc(item.name)}</div>
+      <div class="store-desc">${esc(item.description)}</div>
+      <div class="store-cost">${item.owned ? '' : `${item.cost} pts`}</div>
+      ${item.owned
+        ? `<button class="store-owned-btn">✓ Owned</button>`
+        : `<button class="store-buy-btn" onclick="buyItem('${item.id}')">Buy</button>`}`;
+    grid.appendChild(card);
+  });
+}
+
+async function buyItem(itemId) {
+  const r = await api('/api/store/buy', { method: 'POST', body: JSON.stringify({ itemId }) });
+  const d = await r.json();
+  if (!r.ok) { toast(d.error || 'Purchase failed', 'error'); return; }
+  toast(d.message, 'success');
+  // Reload me and store
+  const meRes = await api('/auth/me');
+  if (meRes.ok) { me = await meRes.json(); applyTheme(me.theme); renderSelf(); }
+  await loadStore();
+}
+
+// ── Admin Dashboard ────────────────────────────────────────────────────────────
+function openAdmin() { showModal('adminModal'); adminTab('overview', document.querySelector('.admin-tab')); }
+
+function adminTab(tab, btn) {
+  document.querySelectorAll('.admin-tab').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const body = document.getElementById('adminBody');
+  body.innerHTML = '<div style="padding:24px;text-align:center;color:#96989d">Loading…</div>';
+  if (tab === 'overview') renderAdminOverview(body);
+  else if (tab === 'users') renderAdminUsers(body);
+  else if (tab === 'bans') renderAdminBans(body);
+  else if (tab === 'modlogs') renderAdminModlogs(body);
+  else if (tab === 'servers') renderAdminServers(body);
+}
+
+async function renderAdminOverview(body) {
+  const r = await api('/api/admin/stats');
+  if (!r.ok) { body.innerHTML = '<div style="color:#ed4245;padding:16px">Failed to load stats</div>'; return; }
+  const s = await r.json();
+  body.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-num">${s.totalUsers.toLocaleString()}</div><div class="stat-label">Total Users</div></div>
+      <div class="stat-card"><div class="stat-num">${s.totalServers.toLocaleString()}</div><div class="stat-label">Servers</div></div>
+      <div class="stat-card"><div class="stat-num">${s.totalMessages.toLocaleString()}</div><div class="stat-label">Messages</div></div>
+      <div class="stat-card"><div class="stat-num" style="color:#ed4245">${s.activeBans}</div><div class="stat-label">Active Bans</div></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn-secondary" onclick="adminTab('users',null)">Manage Users</button>
+      <button class="btn-secondary" onclick="adminTab('bans',null)">View Bans</button>
+      <button class="btn-secondary" onclick="adminTab('modlogs',null)">Mod Logs</button>
+    </div>`;
+}
+
+async function renderAdminUsers(body, q = '') {
+  const r = await api(`/api/admin/users?q=${encodeURIComponent(q)}`);
+  if (!r.ok) { body.innerHTML = '<div style="color:#ed4245;padding:16px">Failed to load users</div>'; return; }
+  const { users, total } = await r.json();
+  body.innerHTML = `
+    <input class="admin-search" placeholder="Search by username or email…" value="${esc(q)}" oninput="renderAdminUsers(document.getElementById('adminBody'), this.value)">
+    <div style="color:#96989d;font-size:13px;margin-bottom:8px">${total} user(s)</div>
+    <div style="overflow-x:auto">
+    <table class="admin-table">
+      <thead><tr><th>User</th><th>Email</th><th>Level</th><th>Points</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>
+        ${users.map(u => `
+          <tr>
+            <td>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:28px;height:28px;border-radius:50%;background:#3f4147;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:12px">
+                  ${u.avatar ? `<img src="${u.avatar}" style="width:100%;height:100%;object-fit:cover">` : u.username[0].toUpperCase()}
+                </div>
+                <div>
+                  <div style="font-weight:600;font-size:13px">${esc(u.username)} ${u.is_admin ? '<span class="tag tag-admin">admin</span>' : ''}</div>
+                  ${u.is_banned ? '<span class="tag tag-banned">banned</span>' : ''}
+                </div>
+              </div>
+            </td>
+            <td style="color:#96989d;font-size:12px">${esc(u.email)}</td>
+            <td>Lv.${u.level}</td>
+            <td>${u.points}</td>
+            <td><span style="font-size:12px">${u.status||'unknown'}</span></td>
+            <td>
+              <div style="display:flex;gap:4px;flex-wrap:wrap">
+                ${u.is_banned
+                  ? `<button class="action-btn success" title="Unban" onclick="adminUnban(${u.id})" style="font-size:12px;padding:3px 8px;border-radius:4px;background:#57f287;color:#000;border:none;cursor:pointer;font-weight:600">Unban</button>`
+                  : `<button class="action-btn danger" title="Ban" onclick="adminBan(${u.id},'${esc(u.username)}')" style="font-size:12px;padding:3px 8px;border-radius:4px;background:#ed4245;color:#fff;border:none;cursor:pointer;font-weight:600">Ban</button>`}
+                <button title="Grant/Remove Badge" onclick="adminBadge(${u.id},'${esc(u.username)}')" style="font-size:12px;padding:3px 8px;border-radius:4px;background:#2b2d31;color:#dcddde;border:none;cursor:pointer">Badge</button>
+                <button title="Adjust Points" onclick="adminPoints(${u.id},'${esc(u.username)}')" style="font-size:12px;padding:3px 8px;border-radius:4px;background:#2b2d31;color:#dcddde;border:none;cursor:pointer">Points</button>
+              </div>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table></div>`;
+}
+
+async function adminBan(userId, username) {
+  const reason = prompt(`Ban reason for ${username}:`);
   if (!reason) return;
-  const [action, ...args] = reason.split(':');
-  const headers = { 'Content-Type': 'application/json' };
-  const cred = { credentials:'include' };
-
-  if (action === 'ban') {
-    fetch(`/api/users/${userId}/ban`, { method:'POST', headers, body:JSON.stringify({reason:args.join(':')||'No reason'}), ...cred }).then(r=>r.json()).then(d=>toast(d.message||d.error));
-  } else if (action === 'kick') {
-    fetch(`/api/users/${userId}/kick`, { method:'POST', headers, body:JSON.stringify({serverId:parseInt(args[0]),reason:''}), ...cred }).then(r=>r.json()).then(d=>toast(d.message||d.error));
-  } else if (action === 'timeout') {
-    fetch(`/api/users/${userId}/timeout`, { method:'POST', headers, body:JSON.stringify({serverId:parseInt(args[0]),minutes:parseInt(args[1])||10,reason:''}), ...cred }).then(r=>r.json()).then(d=>toast(d.message||d.error));
-  } else if (action === 'grant_badge') {
-    fetch(`/api/users/${userId}/badge`, { method:'POST', headers, body:JSON.stringify({badge:`badge_${args[0]}`,grant:true}), ...cred }).then(r=>r.json()).then(d=>toast(d.message||d.error));
-  } else if (action === 'remove_badge') {
-    fetch(`/api/users/${userId}/badge`, { method:'POST', headers, body:JSON.stringify({badge:`badge_${args[0]}`,grant:false}), ...cred }).then(r=>r.json()).then(d=>toast(d.message||d.error));
-  } else if (action === 'points') {
-    fetch(`/api/users/${userId}/points`, { method:'POST', headers, body:JSON.stringify({delta:parseInt(args[0])}), ...cred }).then(r=>r.json()).then(d=>toast(d.message||d.error));
-  } else if (action === 'reset_xp') {
-    fetch(`/api/users/${userId}/reset-xp`, { method:'POST', headers, ...cred }).then(r=>r.json()).then(d=>toast(d.message||d.error));
-  }
+  const r = await api(`/api/admin/users/${userId}/ban`, { method: 'POST', body: JSON.stringify({ reason }) });
+  const d = await r.json();
+  toast(r.ok ? 'User banned' : d.error || 'Failed', r.ok ? 'success' : 'error');
+  if (r.ok) renderAdminUsers(document.getElementById('adminBody'));
 }
 
-// ─── Server settings ───────────────────────────────────────────────────────────
-function showServerSettings(server) {
-  showSimpleModal(`${server.name} Settings`, `
-    <div class="field-group"><label>INVITE LINK</label><input type="text" value="${location.origin}/join/${server.invite_code}" readonly onclick="this.select()" style="cursor:copy"></div>
-    ${server.myRole === 'owner' ? `
-      <div style="margin-top:16px">
-        <button class="btn-danger" onclick="deleteServer(${server.id})">Delete Server</button>
-      </div>` : ''}
-    ${server.myRole !== 'owner' ? `<button class="btn-ghost" onclick="leaveServer(${server.id})">Leave Server</button>` : ''}
-  `);
+async function adminUnban(userId) {
+  const r = await api(`/api/admin/users/${userId}/unban`, { method: 'POST' });
+  const d = await r.json();
+  toast(r.ok ? 'User unbanned' : d.error || 'Failed', r.ok ? 'success' : 'error');
+  if (r.ok) renderAdminUsers(document.getElementById('adminBody'));
 }
 
-async function deleteServer(id) {
-  if (!prompt('Type DELETE to confirm:') === 'DELETE') return;
-  const res = await fetch(`/api/servers/${id}`, { method:'DELETE', credentials:'include' });
-  if (res.ok) { toast('Server deleted'); servers = servers.filter(s => s.id !== id); renderServerDock(); showHome(); }
+async function adminBadge(userId, username) {
+  const badge = prompt(`Badge for ${username} (badge_blue, badge_gold, badge_rail, badge_admin):`);
+  if (!badge) return;
+  const grant = confirm(`Grant badge "${badge}"? (Cancel = Remove)`);
+  const r = await api(`/api/admin/users/${userId}/badge`, { method: 'POST', body: JSON.stringify({ badge, grant }) });
+  const d = await r.json();
+  toast(r.ok ? d.message : d.error || 'Failed', r.ok ? 'success' : 'error');
 }
 
-async function leaveServer(id) {
-  const res = await fetch(`/api/servers/${id}/leave`, { method:'DELETE', credentials:'include' });
-  const d = await res.json();
-  if (res.ok) { servers = servers.filter(s => s.id !== id); renderServerDock(); showHome(); }
-  else toast(d.error || 'Failed to leave', 'error');
+async function adminPoints(userId, username) {
+  const delta = parseInt(prompt(`Points change for ${username} (use negative to remove):`));
+  if (isNaN(delta)) return;
+  const r = await api(`/api/admin/users/${userId}/points`, { method: 'POST', body: JSON.stringify({ delta }) });
+  const d = await r.json();
+  toast(r.ok ? d.message : d.error || 'Failed', r.ok ? 'success' : 'error');
 }
 
-// ─── Email verification ────────────────────────────────────────────────────────
-async function resendVerification() {
-  const res = await fetch('/auth/resend-verification', { method:'POST', credentials:'include' });
-  const d = await res.json();
-  toast(res.ok ? d.message : (d.error||'Failed'), res.ok ? 'success' : 'error');
+async function renderAdminBans(body) {
+  const r = await api('/api/admin/bans');
+  const bans = await r.json();
+  if (!bans.length) { body.innerHTML = '<div style="padding:16px;color:#96989d">No active bans</div>'; return; }
+  body.innerHTML = `<div style="overflow-x:auto"><table class="admin-table">
+    <thead><tr><th>Username</th><th>Email</th><th>Reason</th><th>Banned By</th><th>Date</th><th>Action</th></tr></thead>
+    <tbody>${bans.map(b => `<tr>
+      <td><strong>${esc(b.username)}</strong></td>
+      <td style="color:#96989d;font-size:12px">${esc(b.email)}</td>
+      <td>${esc(b.reason)}</td>
+      <td>${esc(b.banned_by_username||'System')}</td>
+      <td style="font-size:12px;color:#96989d">${new Date(b.created_at).toLocaleDateString()}</td>
+      <td><button onclick="adminUnban(${b.user_id})" style="font-size:12px;padding:3px 8px;border-radius:4px;background:#57f287;color:#000;border:none;cursor:pointer;font-weight:600">Unban</button></td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
 }
 
-// ─── Logout ────────────────────────────────────────────────────────────────────
-async function doLogout() {
-  await fetch('/auth/logout', { method:'POST', credentials:'include' });
+async function renderAdminModlogs(body) {
+  const r = await api('/api/admin/modlogs');
+  const { logs } = await r.json();
+  if (!logs.length) { body.innerHTML = '<div style="padding:16px;color:#96989d">No moderation logs</div>'; return; }
+  body.innerHTML = `<div style="overflow-x:auto"><table class="admin-table">
+    <thead><tr><th>Admin</th><th>Action</th><th>Target</th><th>Reason</th><th>Date</th></tr></thead>
+    <tbody>${logs.map(l => `<tr>
+      <td><strong>${esc(l.admin_username||'System')}</strong></td>
+      <td><span class="tag" style="background:#2b2d31;color:#dcddde">${esc(l.action)}</span></td>
+      <td>${esc(l.target_username||'-')}</td>
+      <td style="color:#96989d;font-size:12px">${esc(l.reason||'-')}</td>
+      <td style="font-size:12px;color:#96989d">${new Date(l.created_at).toLocaleString()}</td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+async function renderAdminServers(body) {
+  const r = await api('/api/admin/servers');
+  const servers = await r.json();
+  body.innerHTML = `<div style="overflow-x:auto"><table class="admin-table">
+    <thead><tr><th>Server</th><th>Owner</th><th>Members</th><th>Channels</th><th>Action</th></tr></thead>
+    <tbody>${servers.map(s => `<tr>
+      <td><strong>${esc(s.name)}</strong> <span style="color:#96989d;font-size:12px">${esc(s.invite_code)}</span></td>
+      <td>${esc(s.owner_username||'Unknown')}</td>
+      <td>${s.member_count}</td>
+      <td>${s.channel_count}</td>
+      <td><button onclick="adminDeleteServer(${s.id},'${esc(s.name)}')" style="font-size:12px;padding:3px 8px;border-radius:4px;background:#ed4245;color:#fff;border:none;cursor:pointer;font-weight:600">Delete</button></td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+async function adminDeleteServer(id, name) {
+  if (!confirm(`Delete server "${name}"? This is PERMANENT.`)) return;
+  const r = await api(`/api/admin/servers/${id}`, { method: 'DELETE' });
+  const d = await r.json();
+  toast(r.ok ? 'Server deleted' : d.error || 'Failed', r.ok ? 'success' : 'error');
+  if (r.ok) renderAdminServers(document.getElementById('adminBody'));
+}
+
+// ── Modal helpers ──────────────────────────────────────────────────────────────
+function showModal(id) { document.getElementById(id).style.display = 'flex'; }
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+// ── Auth ───────────────────────────────────────────────────────────────────────
+async function logout() {
+  await api('/auth/logout', { method: 'POST' });
+  location.href = '/login.html';
+}
+async function logoutAll() {
+  await api('/auth/logout-all', { method: 'POST' });
   location.href = '/login.html';
 }
 
-// ─── Profile bar ───────────────────────────────────────────────────────────────
-function renderProfileBar() {
-  document.getElementById('pb-name').textContent = me.display_name || me.username;
-  document.getElementById('pb-tag').textContent = `@${me.username}`;
-  const canvas = document.getElementById('pb-avatar');
-  const ctx = canvas.getContext('2d');
-  if (me.avatar) {
-    const img = new Image();
-    img.onload = () => { ctx.clearRect(0,0,32,32); ctx.save(); ctx.beginPath(); ctx.arc(16,16,16,0,Math.PI*2); ctx.clip(); ctx.drawImage(img,0,0,32,32); ctx.restore(); };
-    img.src = me.avatar;
-  } else {
-    ctx.fillStyle = strToColor(me.username);
-    ctx.beginPath(); ctx.arc(16,16,16,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(me.username.charAt(0).toUpperCase(), 16, 16);
-  }
-  const dot = document.getElementById('pb-status-dot');
-  dot.className = `status-dot status-${me.status || 'online'}`;
-}
-
-// ─── Layout helpers ────────────────────────────────────────────────────────────
-function showChatArea() {
-  document.getElementById('welcome-screen').style.display = 'none';
-  document.getElementById('chat-area').style.display = 'flex';
-}
-function hideChatArea() {
-  document.getElementById('chat-area').style.display = 'none';
-  document.getElementById('welcome-screen').style.display = 'flex';
-}
-
-// ─── Modals ────────────────────────────────────────────────────────────────────
-function openModal(id) { document.getElementById(id).classList.remove('hidden'); }
-function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
-function closeModalOverlay(e, id) { if (e.target.id === id) closeModal(id); }
-
-function showSimpleModal(title, body) {
-  const existing = document.getElementById('simple-modal-overlay');
-  if (existing) existing.remove();
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.id = 'simple-modal-overlay';
-  overlay.innerHTML = `
-    <div class="modal" onclick="event.stopPropagation()">
-      <h2>${escHtml(title)}</h2>
-      <div>${body}</div>
-      <div class="modal-footer"><button class="btn-ghost" onclick="document.getElementById('simple-modal-overlay').remove()">Close</button></div>
-    </div>`;
-  overlay.onclick = () => overlay.remove();
-  document.body.appendChild(overlay);
-}
-
-// ─── Toast ─────────────────────────────────────────────────────────────────────
-function toast(msg, type = 'info') {
-  const tc = document.getElementById('toast-container');
-  const el = document.createElement('div');
-  el.className = `toast ${type === 'error' ? 'toast-error' : type === 'success' ? 'toast-success' : ''}`;
-  el.textContent = msg;
-  tc.appendChild(el);
-  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity 0.3s'; setTimeout(() => el.remove(), 300); }, 3500);
-}
-
-// ─── Utilities ─────────────────────────────────────────────────────────────────
-function escHtml(str) {
-  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
-
-function strToColor(str) {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
-  const h = hash % 360;
-  return `hsl(${h},55%,45%)`;
-}
-
-// Close emoji picker on click outside
-document.addEventListener('click', (e) => {
-  const picker = document.getElementById('emoji-picker');
-  if (!picker.contains(e.target) && !e.target.closest('.input-emoji-btn') && !e.target.classList.contains('msg-action-btn')) {
-    picker.classList.add('hidden');
-    emojiTargetMsgId = null;
-  }
-});
-
-// Handle keyboard shortcuts
-document.addEventListener('keydown', (e) => {
+// ── Keyboard shortcuts ─────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    closeSettings();
-    document.querySelectorAll('.modal-overlay').forEach(m => m.classList.add('hidden'));
-    document.getElementById('emoji-picker').classList.add('hidden');
-    closeProfilePanel();
+    const modals = ['adminModal','storeModal','settingsModal','profileModal','addFriendModal','createServerModal','joinServerModal'];
+    for (const id of modals) {
+      const el = document.getElementById(id);
+      if (el && el.style.display !== 'none') { closeModal(id); return; }
+    }
   }
 });
 
-// ─── Start ─────────────────────────────────────────────────────────────────────
-init();
+// ── Boot ───────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', init);

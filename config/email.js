@@ -1,83 +1,63 @@
 const nodemailer = require('nodemailer');
 
-let transporter;
+const EMAIL_ENABLED = process.env.EMAIL_ENABLED === 'true';
+const BASE = process.env.BASE_URL || 'http://localhost:3000';
+const FROM = process.env.EMAIL_FROM || 'Sigma Chat <noreply@sigmachat.local>';
 
+let transporter;
 function getTransporter() {
   if (!transporter) {
-    transporter = nodemailer.createTransporter({
+    transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST,
       port: parseInt(process.env.SMTP_PORT || '587'),
       secure: process.env.SMTP_SECURE === 'true',
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
     });
   }
   return transporter;
 }
 
-const BASE = process.env.BASE_URL || 'http://localhost:3000';
-const FROM = process.env.EMAIL_FROM || 'Sigma Chat <noreply@sigmachat.local>';
+async function maybeSend(to, subject, html) {
+  if (!EMAIL_ENABLED) {
+    console.log(`\n[EMAIL DISABLED] To: ${to} | Subject: ${subject}\n${html.replace(/<[^>]+>/g,'')}\n`);
+    return;
+  }
+  await getTransporter().sendMail({ from: FROM, to, subject, html });
+}
 
 async function sendVerificationEmail(email, username, token) {
   const link = `${BASE}/auth/verify-email?token=${token}`;
-  await getTransporter().sendMail({
-    from: FROM,
-    to: email,
-    subject: 'Verify your Sigma Chat email',
-    html: `
-      <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#1e1f22;color:#dcddde;padding:32px;border-radius:12px;">
-        <h1 style="color:#5865f2;margin-bottom:8px;">Sigma Chat</h1>
-        <h2 style="margin-top:0">Hey ${username}, verify your email</h2>
-        <p>Click the button below to verify your email address. This link expires in <strong>24 hours</strong>.</p>
-        <a href="${link}" style="display:inline-block;background:#5865f2;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:700;margin:16px 0;">Verify Email</a>
-        <p style="font-size:13px;color:#96989d;">Or copy this link:<br><a href="${link}" style="color:#5865f2;">${link}</a></p>
-        <hr style="border-color:#313338;margin:24px 0;">
-        <p style="font-size:12px;color:#72767d;">If you didn't create a Sigma Chat account, ignore this email.</p>
-      </div>
-    `,
-  });
+  await maybeSend(email, 'Verify your Sigma Chat email', `
+    <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#1e1f22;color:#dcddde;padding:32px;border-radius:12px;">
+      <h1 style="color:#5865f2">Sigma Chat</h1>
+      <h2>Hey ${username}, verify your email</h2>
+      <p>Click below to verify your email. Expires in <strong>24 hours</strong>.</p>
+      <a href="${link}" style="display:inline-block;background:#5865f2;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:700;margin:16px 0">Verify Email</a>
+      <p style="font-size:13px;color:#96989d">Or copy: <a href="${link}" style="color:#5865f2">${link}</a></p>
+    </div>`);
 }
 
 async function sendPasswordResetEmail(email, username, token) {
   const link = `${BASE}/auth/reset-password?token=${token}`;
-  await getTransporter().sendMail({
-    from: FROM,
-    to: email,
-    subject: 'Reset your Sigma Chat password',
-    html: `
-      <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#1e1f22;color:#dcddde;padding:32px;border-radius:12px;">
-        <h1 style="color:#5865f2;margin-bottom:8px;">Sigma Chat</h1>
-        <h2 style="margin-top:0">Password Reset Request</h2>
-        <p>Hey ${username}, someone requested a password reset for your account. Click below to set a new password. This link expires in <strong>1 hour</strong>.</p>
-        <a href="${link}" style="display:inline-block;background:#ed4245;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:700;margin:16px 0;">Reset Password</a>
-        <p style="font-size:13px;color:#96989d;">Or copy this link:<br><a href="${link}" style="color:#5865f2;">${link}</a></p>
-        <hr style="border-color:#313338;margin:24px 0;">
-        <p style="font-size:12px;color:#72767d;">If you didn't request this, ignore this email — your password won't change.</p>
-      </div>
-    `,
-  });
+  await maybeSend(email, 'Reset your Sigma Chat password', `
+    <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#1e1f22;color:#dcddde;padding:32px;border-radius:12px;">
+      <h1 style="color:#5865f2">Sigma Chat</h1>
+      <h2>Password Reset</h2>
+      <p>Hey ${username} — click below to reset your password. Expires in <strong>1 hour</strong>.</p>
+      <a href="${link}" style="display:inline-block;background:#ed4245;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:700;margin:16px 0">Reset Password</a>
+      <p style="font-size:13px;color:#96989d">Or copy: <a href="${link}" style="color:#5865f2">${link}</a></p>
+    </div>`);
 }
 
 async function sendChangeEmailVerification(newEmail, username, token) {
   const link = `${BASE}/auth/confirm-email-change?token=${token}`;
-  await getTransporter().sendMail({
-    from: FROM,
-    to: newEmail,
-    subject: 'Confirm your new Sigma Chat email',
-    html: `
-      <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#1e1f22;color:#dcddde;padding:32px;border-radius:12px;">
-        <h1 style="color:#5865f2;margin-bottom:8px;">Sigma Chat</h1>
-        <h2 style="margin-top:0">Confirm email change</h2>
-        <p>Hey ${username}, confirm your new email address by clicking below. This link expires in <strong>24 hours</strong>.</p>
-        <a href="${link}" style="display:inline-block;background:#57f287;color:#000;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:700;margin:16px 0;">Confirm New Email</a>
-        <p style="font-size:13px;color:#96989d;">Or copy this link:<br><a href="${link}" style="color:#5865f2;">${link}</a></p>
-        <hr style="border-color:#313338;margin:24px 0;">
-        <p style="font-size:12px;color:#72767d;">If you didn't request this, ignore this email.</p>
-      </div>
-    `,
-  });
+  await maybeSend(newEmail, 'Confirm your new Sigma Chat email', `
+    <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#1e1f22;color:#dcddde;padding:32px;border-radius:12px;">
+      <h1 style="color:#5865f2">Sigma Chat</h1>
+      <h2>Confirm email change</h2>
+      <p>Hey ${username} — click below to confirm your new email. Expires in <strong>24 hours</strong>.</p>
+      <a href="${link}" style="display:inline-block;background:#57f287;color:#000;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:700;margin:16px 0">Confirm New Email</a>
+    </div>`);
 }
 
-module.exports = { sendVerificationEmail, sendPasswordResetEmail, sendChangeEmailVerification };
+module.exports = { sendVerificationEmail, sendPasswordResetEmail, sendChangeEmailVerification, EMAIL_ENABLED };

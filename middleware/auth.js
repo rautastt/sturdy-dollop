@@ -15,11 +15,4 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-function requireVerified(req, res, next) {
-  if (!req.session?.emailVerified) {
-    return res.status(403).json({ error: 'Email verification required', code: 'EMAIL_NOT_VERIFIED' });
-  }
-  next();
-}
-
-module.exports = { requireAuth, requireAdmin, requireVerified };
+module.exports = { requireAuth, requireAdmin };
