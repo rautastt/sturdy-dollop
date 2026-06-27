@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sigma Chat</title>
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div id="toast-container"></div>
+
+<div class="app-layout" id="app-layout" style="display:none">
+  <!-- Server Dock -->
+  <nav id="server-dock">
+    <div class="dock-item" id="dock-home" title="Home" onclick="showHome()">
+      <span>Σ</span>
+      <div class="dock-tooltip">Home</div>
+    </div>
+    <div class="dock-separator"></div>
+    <div id="server-icons"></div>
+    <div class="dock-item add-server-btn" onclick="openModal('modal-create-server')" title="Add Server">
+      <span>+</span>
+      <div class="dock-tooltip">Add a Server</div>
+    </div>
+  </nav>
+
+  <!-- Channel Sidebar -->
+  <aside id="channel-sidebar">
+    <div id="sidebar-header-wrap">
+      <div class="sidebar-header" id="sidebar-title">Sigma Chat</div>
+    </div>
+    <div id="channel-list"></div>
+    <div id="profile-bar">
+      <div id="pb-avatar-wrap" style="position:relative;flex-shrink:0;cursor:pointer" onclick="openSettings()">
+        <canvas id="pb-avatar" width="32" height="32" style="border-radius:50%"></canvas>
+        <div class="status-dot status-online" style="position:absolute;bottom:-1px;right:-1px" id="pb-status-dot"></div>
+      </div>
+      <div class="profile-bar-info" onclick="openSettings()" style="cursor:pointer">
+        <div class="profile-bar-name" id="pb-name">Loading...</div>
+        <div class="profile-bar-tag" id="pb-tag"></div>
+      </div>
+      <div class="profile-bar-actions">
+        <div class="icon-btn" title="Settings" onclick="openSettings()">⚙</div>
+        <div class="icon-btn" title="Log out" onclick="doLogout()">⏻</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Welcome / Chat area -->
+  <main id="main-area" style="flex:1;display:flex;overflow:hidden">
+    <div id="welcome-screen">
+      <div class="welcome-icon">Σ</div>
+      <h2>Welcome to Sigma Chat</h2>
+      <p>Select a server and channel to start chatting, or open a DM with a friend.</p>
+      <button class="btn-primary" onclick="openModal('modal-create-server')">Create a Server</button>
+    </div>
+
+    <div id="chat-area" style="display:none">
+      <div id="unverified-banner" class="unverified-banner" style="display:none">
+        ⚠ Your email is not verified. Some features may be limited.
+        <a onclick="resendVerification()">Resend verification email</a>
+      </div>
+      <div id="chat-header">
+        <span class="chat-header-icon" id="ch-icon">#</span>
+        <span class="chat-header-name" id="ch-name">general</span>
+        <span class="chat-header-topic" id="ch-topic" style="display:none"></span>
+        <div class="chat-header-spacer"></div>
+        <div class="icon-btn" id="btn-pinned" title="Pinned messages" onclick="showPinned()">📌</div>
+        <div class="icon-btn" id="btn-members" title="Toggle members" onclick="toggleMemberList()">👥</div>
+        <div class="icon-btn" title="Search users" onclick="openModal('modal-search')">🔍</div>
+      </div>
+      <div id="messages-container">
+        <div class="messages-start">
+          <h2 id="channel-start-name"># general</h2>
+          <p id="channel-start-desc">This is the beginning of the channel.</p>
+        </div>
+      </div>
+      <div id="typing-indicator"></div>
+      <div id="chat-input-area">
+        <div id="reply-bar" class="reply-bar" style="display:none">
+          Replying to <strong id="reply-to-name"></strong>
+          <span class="reply-cancel" onclick="cancelReply()">✕</span>
+        </div>
+        <div class="input-wrapper">
+          <span class="input-emoji-btn" onclick="toggleEmojiPicker()">😊</span>
+          <textarea id="message-input" placeholder="Message #general" rows="1" onkeydown="handleInputKey(event)" oninput="handleTyping()"></textarea>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Member List -->
+  <aside id="member-list" style="display:none"></aside>
+</div>
+
+<!-- Loading screen -->
+<div id="loading-screen" style="position:fixed;inset:0;background:#1e1f22;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;font-size:48px;z-index:9999">
+  Σ
+  <div style="font-size:16px;color:#96989d;">Loading Sigma Chat...</div>
+</div>
+
+<!-- ─── Modals ─────────────────────────────────────────────────────────────── -->
+
+<!-- Create Server -->
+<div class="modal-overlay hidden" id="modal-create-server" onclick="closeModalOverlay(event,'modal-create-server')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h2>Create a Server</h2>
+    <p>Give your server a personality with a name. You can always change it later.</p>
+    <div class="field-group"><label>SERVER NAME</label><input type="text" id="new-server-name" placeholder="My Awesome Server" maxlength="100"></div>
+    <div class="field-group"><label>DESCRIPTION (optional)</label><textarea id="new-server-desc" rows="2" placeholder="What's this server about?" style="width:100%;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--text-normal);font-size:15px;resize:none;outline:none"></textarea></div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-create-server')">Cancel</button>
+      <button class="btn-primary" onclick="createServer()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Join Server -->
+<div class="modal-overlay hidden" id="modal-join-server" onclick="closeModalOverlay(event,'modal-join-server')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h2>Join a Server</h2>
+    <p>Enter an invite code to join an existing server.</p>
+    <div class="field-group"><label>INVITE CODE</label><input type="text" id="join-invite-code" placeholder="e.g. abc12345"></div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-join-server')">Cancel</button>
+      <button class="btn-primary" onclick="joinServer()">Join</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Channel -->
+<div class="modal-overlay hidden" id="modal-create-channel" onclick="closeModalOverlay(event,'modal-create-channel')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h2>Create Channel</h2>
+    <div class="field-group"><label>CHANNEL NAME</label><input type="text" id="new-channel-name" placeholder="new-channel" maxlength="64"></div>
+    <div class="field-group"><label>TYPE</label>
+      <select id="new-channel-type" style="width:100%;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--text-normal)">
+        <option value="text">Text</option>
+        <option value="announcement">Announcement</option>
+      </select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-create-channel')">Cancel</button>
+      <button class="btn-primary" onclick="createChannel()">Create Channel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Search Users -->
+<div class="modal-overlay hidden" id="modal-search" onclick="closeModalOverlay(event,'modal-search')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h2>Search Users</h2>
+    <div class="field-group"><input type="text" id="search-input" placeholder="Search by username..." oninput="searchUsers()"></div>
+    <div id="search-results" style="max-height:300px;overflow-y:auto"></div>
+  </div>
+</div>
+
+<!-- Emoji Picker (simple) -->
+<div id="emoji-picker" class="hidden" style="position:fixed;background:var(--bg-secondary);border:1px solid var(--border);border-radius:12px;padding:12px;z-index:9999;display:grid;grid-template-columns:repeat(8,1fr);gap:4px;font-size:22px;box-shadow:0 8px 32px rgba(0,0,0,0.5)">
+</div>
+
+<!-- Profile Panel -->
+<div id="profile-panel" class="profile-panel hidden" style="position:fixed;z-index:9000"></div>
+
+<!-- Settings Overlay -->
+<div id="settings-overlay" class="hidden" style="position:fixed;inset:0;z-index:8000;background:var(--bg-tertiary)">
+  <div class="settings-layout">
+    <nav class="settings-nav">
+      <div class="settings-nav-section">User Settings</div>
+      <div class="settings-nav-item active" onclick="showSettingsPage('profile')">My Account</div>
+      <div class="settings-nav-item" onclick="showSettingsPage('appearance')">Appearance</div>
+      <div class="settings-nav-item" onclick="showSettingsPage('sessions')">Sessions</div>
+      <div class="settings-nav-section" style="margin-top:16px">Billing</div>
+      <div class="settings-nav-item" onclick="showSettingsPage('store')">Store</div>
+      <div class="settings-nav-section" style="margin-top:16px">Actions</div>
+      <div class="settings-nav-item" style="color:var(--danger)" onclick="doLogout()">Log Out</div>
+      <div style="margin-top:16px;padding:8px">
+        <button class="btn-ghost btn-full" onclick="closeSettings()" style="font-size:14px">✕ Close Settings</button>
+      </div>
+    </nav>
+    <div class="settings-content" id="settings-content">
+      Loading...
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

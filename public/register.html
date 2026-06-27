@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sigma Chat — Register</title>
+  <link rel="stylesheet" href="/css/main.css">
+</head>
+<body class="auth-page">
+  <div class="auth-bg">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <div class="logo-icon">Σ</div>
+        <span class="logo-text">Sigma Chat</span>
+      </div>
+      <h1>Create an account</h1>
+      <p class="auth-sub">Join the community</p>
+      <div id="msg-box" class="msg-box hidden"></div>
+      <form onsubmit="doRegister(event)">
+        <div class="field-group">
+          <label>USERNAME</label>
+          <input type="text" id="username" placeholder="e.g. sigma_user" required minlength="2" maxlength="32" autocomplete="username" pattern="[a-zA-Z0-9_.\-]+">
+          <span class="field-hint">Letters, numbers, underscores, dots and dashes only</span>
+        </div>
+        <div class="field-group">
+          <label>EMAIL</label>
+          <input type="email" id="email" placeholder="you@example.com" required autocomplete="email">
+        </div>
+        <div class="field-group">
+          <label>PASSWORD</label>
+          <input type="password" id="password" placeholder="At least 8 characters" required minlength="8" autocomplete="new-password">
+        </div>
+        <button type="submit" class="btn-primary btn-full" id="reg-btn">Create Account</button>
+      </form>
+      <p class="auth-footer">Already have an account? <a href="/login.html">Log In</a></p>
+    </div>
+  </div>
+  <script>
+    const msgBox = document.getElementById('msg-box');
+    function showMsg(msg, type = 'error') {
+      msgBox.className = `msg-box msg-${type}`;
+      msgBox.textContent = msg;
+    }
+    async function doRegister(e) {
+      e.preventDefault();
+      const btn = document.getElementById('reg-btn');
+      btn.disabled = true; btn.textContent = 'Creating account...';
+      const body = {
+        username: document.getElementById('username').value,
+        email: document.getElementById('email').value,
+        password: document.getElementById('password').value,
+      };
+      try {
+        const res = await fetch('/auth/register', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body), credentials: 'include',
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          const errMsg = data.errors ? data.errors.map(e => e.msg).join('. ') : (data.error || 'Registration failed');
+          showMsg(errMsg);
+          btn.disabled = false; btn.textContent = 'Create Account';
+          return;
+        }
+        showMsg('Account created! Check your email to verify your account.', 'success');
+        btn.textContent = 'Done!';
+        setTimeout(() => location.href = '/login.html', 3000);
+      } catch (err) {
+        showMsg('Network error. Please try again.');
+        btn.disabled = false; btn.textContent = 'Create Account';
+      }
+    }
+  </script>
+</body>
+</html>

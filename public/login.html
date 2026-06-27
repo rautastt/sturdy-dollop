@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sigma Chat — Login</title>
+  <link rel="stylesheet" href="/css/main.css">
+</head>
+<body class="auth-page">
+  <div class="auth-bg">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <div class="logo-icon">Σ</div>
+        <span class="logo-text">Sigma Chat</span>
+      </div>
+
+      <div id="msg-box" class="msg-box hidden"></div>
+
+      <div id="login-form">
+        <h1>Welcome back!</h1>
+        <p class="auth-sub">We're so excited to see you again!</p>
+        <form onsubmit="doLogin(event)">
+          <div class="field-group">
+            <label>EMAIL OR USERNAME</label>
+            <input type="text" id="login-input" placeholder="Enter your email or username" required autocomplete="username">
+          </div>
+          <div class="field-group">
+            <label>PASSWORD</label>
+            <input type="password" id="password-input" placeholder="Enter your password" required autocomplete="current-password">
+            <a href="/auth/forgot-password-page" class="forgot-link" onclick="showForgot(event)">Forgot your password?</a>
+          </div>
+          <button type="submit" class="btn-primary btn-full" id="login-btn">Log In</button>
+        </form>
+        <p class="auth-footer">Need an account? <a href="/register.html">Register</a></p>
+      </div>
+
+      <div id="forgot-form" class="hidden">
+        <h1>Reset your password</h1>
+        <p class="auth-sub">Enter your email and we'll send a reset link.</p>
+        <form onsubmit="doForgot(event)">
+          <div class="field-group">
+            <label>EMAIL</label>
+            <input type="email" id="forgot-email" placeholder="Enter your email" required>
+          </div>
+          <button type="submit" class="btn-primary btn-full">Send Reset Link</button>
+        </form>
+        <p class="auth-footer"><a href="#" onclick="showLogin(event)">← Back to login</a></p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const msgBox = document.getElementById('msg-box');
+
+    function showMsg(msg, type = 'error') {
+      msgBox.className = `msg-box msg-${type}`;
+      msgBox.textContent = msg;
+    }
+
+    if (params.get('verified') === '1') showMsg('Email verified! You can now log in.', 'success');
+    if (params.get('error') === 'invalid_token') showMsg('Invalid or expired verification link.', 'error');
+    if (params.get('error') === 'invalid_or_expired_token') showMsg('That link has expired. Please request a new one.', 'error');
+
+    function showForgot(e) {
+      e.preventDefault();
+      document.getElementById('login-form').classList.add('hidden');
+      document.getElementById('forgot-form').classList.remove('hidden');
+    }
+    function showLogin(e) {
+      e.preventDefault();
+      document.getElementById('forgot-form').classList.add('hidden');
+      document.getElementById('login-form').classList.remove('hidden');
+    }
+
+    async function doLogin(e) {
+      e.preventDefault();
+      const btn = document.getElementById('login-btn');
+      btn.disabled = true; btn.textContent = 'Logging in...';
+      try {
+        const res = await fetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ login: document.getElementById('login-input').value, password: document.getElementById('password-input').value }),
+          credentials: 'include',
+        });
+        const data = await res.json();
+        if (!res.ok) { showMsg(data.error || 'Login failed'); btn.disabled = false; btn.textContent = 'Log In'; return; }
+        location.href = '/app.html';
+      } catch (err) {
+        showMsg('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Log In';
+      }
+    }
+
+    async function doForgot(e) {
+      e.preventDefault();
+      const email = document.getElementById('forgot-email').value;
+      try {
+        const res = await fetch('/auth/forgot-password', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }), credentials: 'include',
+        });
+        const data = await res.json();
+        showMsg(data.message || 'Reset email sent.', 'success');
+      } catch (err) {
+        showMsg('Network error.');
+      }
+    }
+  </script>
+</body>
+</html>
