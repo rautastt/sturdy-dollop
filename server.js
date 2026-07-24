@@ -83,7 +83,7 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`\n🚀 Sigma Chat running at http://localhost:${PORT}`);
+  console.log(`\n🚀 REBLOX running at http://localhost:${PORT}`);
   console.log(`📧 Email: ${process.env.EMAIL_ENABLED === 'true' ? 'ENABLED' : 'DISABLED (tokens printed to console)'}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}\n`);
 });

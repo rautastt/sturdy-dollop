@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sigma Chat — Login</title>
+<title>REBLOX — Login</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -32,57 +32,10 @@ input:focus{border-color:#5865f2}
 </head>
 <body>
 <div class="card">
-  <div class="logo"><h1>⚡ Sigma Chat</h1><p>The community for Sigmas</p></div>
+  <div class="logo"><h1>⚡ REBLOX</h1><p>The community</p></div>
   <div id="loginView">
     <h2>Welcome back</h2>
     <p class="sub">Sign in to your account</p>
     <div id="errBox" class="error"></div>
     <div id="okBox" class="success"></div>
     <form id="loginForm">
-      <div class="field"><label>Email or Username</label><input type="text" id="login" required autocomplete="username"></div>
-      <div class="field"><label>Password</label><input type="password" id="password" required autocomplete="current-password"></div>
-      <div class="forgot"><a href="#" id="forgotLink">Forgot password?</a></div>
-      <button class="btn" type="submit" id="loginBtn">Sign In</button>
-    </form>
-    <div class="toggle">Don't have an account? <a href="/register.html">Register</a></div>
-  </div>
-  <div id="forgotView" style="display:none">
-    <h2>Forgot Password</h2>
-    <p class="sub">Enter your email and we'll send a reset link</p>
-    <div id="forgotErr" class="error"></div>
-    <div id="forgotOk" class="success"></div>
-    <form id="forgotForm">
-      <div class="field"><label>Email</label><input type="email" id="forgotEmail" required></div>
-      <button class="btn" type="submit">Send Reset Link</button>
-    </form>
-    <div class="toggle"><a href="#" id="backToLogin">← Back to login</a></div>
-  </div>
-</div>
-<script>
-function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el.style.display='block'}
-function hide(id){document.getElementById(id).style.display='none'}
-const params=new URLSearchParams(location.search);
-if(params.get('verified'))show('okBox','Email verified! You can now log in.');
-if(params.get('error'))show('errBox',params.get('error').replace(/_/g,' '));
-
-document.getElementById('loginForm').addEventListener('submit',async e=>{
-  e.preventDefault();hide('errBox');hide('okBox');
-  const btn=document.getElementById('loginBtn');btn.disabled=true;btn.textContent='Signing in…';
-  try{
-    const r=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({login:document.getElementById('login').value,password:document.getElementById('password').value}),credentials:'include'});
-    const d=await r.json();
-    if(!r.ok){show('errBox',d.error||'Login failed');btn.disabled=false;btn.textContent='Sign In';return;}
-    location.href='/app.html';
-  }catch{show('errBox','Network error');btn.disabled=false;btn.textContent='Sign In';}
-});
-document.getElementById('forgotLink').addEventListener('click',e=>{e.preventDefault();document.getElementById('loginView').style.display='none';document.getElementById('forgotView').style.display='block'});
-document.getElementById('backToLogin').addEventListener('click',e=>{e.preventDefault();document.getElementById('forgotView').style.display='none';document.getElementById('loginView').style.display='block'});
-document.getElementById('forgotForm').addEventListener('submit',async e=>{
-  e.preventDefault();hide('forgotErr');hide('forgotOk');
-  const r=await fetch('/auth/forgot-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('forgotEmail').value}),credentials:'include'});
-  const d=await r.json();
-  if(r.ok)show('forgotOk',d.message);else show('forgotErr',d.error||'Failed');
-});
-</script>
-</body>
-</html>

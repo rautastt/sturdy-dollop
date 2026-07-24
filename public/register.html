@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sigma Chat — Register</title>
+<title>REBLOX — Register</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -29,37 +29,9 @@ input:focus{border-color:#5865f2}
 </head>
 <body>
 <div class="card">
-  <div class="logo"><h1>⚡ Sigma Chat</h1><p>Join the community</p></div>
+  <div class="logo"><h1>⚡ REBLOX</h1><p>Join the community</p></div>
   <h2>Create an account</h2>
   <p class="sub">It's free and always will be</p>
   <div id="errBox" class="error"></div>
   <div id="okBox" class="success"></div>
   <form id="regForm">
-    <div class="field"><label>Username</label><input type="text" id="username" required minlength="2" maxlength="32" pattern="[a-zA-Z0-9_.\-]+"><div class="hint">2–32 chars, letters/numbers/_.-</div></div>
-    <div class="field"><label>Email</label><input type="email" id="email" required autocomplete="email"></div>
-    <div class="field"><label>Password</label><input type="password" id="password" required minlength="8"><div class="hint">At least 8 characters</div></div>
-    <button class="btn" type="submit" id="regBtn">Create Account</button>
-  </form>
-  <div class="toggle">Already have an account? <a href="/login.html">Sign In</a></div>
-</div>
-<script>
-function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el.style.display='block'}
-function hide(id){document.getElementById(id).style.display='none'}
-document.getElementById('regForm').addEventListener('submit',async e=>{
-  e.preventDefault();hide('errBox');hide('okBox');
-  const btn=document.getElementById('regBtn');btn.disabled=true;btn.textContent='Creating account…';
-  try{
-    const r=await fetch('/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:document.getElementById('username').value,email:document.getElementById('email').value,password:document.getElementById('password').value}),credentials:'include'});
-    const d=await r.json();
-    if(!r.ok){
-      const msg=d.errors?d.errors.map(e=>e.msg).join(', '):(d.error||'Registration failed');
-      show('errBox',msg);btn.disabled=false;btn.textContent='Create Account';return;
-    }
-    if(d.autoLogin){location.href='/app.html';return;}
-    show('okBox',d.message||'Registered! Check your email to verify your account.');
-    btn.textContent='Done!';
-  }catch{show('errBox','Network error');btn.disabled=false;btn.textContent='Create Account';}
-});
-</script>
-</body>
-</html>
