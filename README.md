@@ -1,135 +1,172 @@
-# ⚡ Sigma Chat
+# Sigma Chat (sturdy-dollop)
 
-A Discord-inspired community platform built with Node.js, Express, Socket.IO, and PostgreSQL.
+A self-hostable chat/server application (Sigma Chat) built with Node.js, Express, Socket.IO and PostgreSQL.
 
----
-
-## Features
-
-- **Real-time chat** — channels, DMs, group chats, typing indicators, reactions, pinned messages, replies
-- **Servers** — create/join servers with invite codes, manage channels, roles
-- **Friends** — add friends, accept/decline requests, DM them directly
-- **Economy** — earn points and XP by chatting; spend them in the store
-- **Store** — buy themes, name colors, chat effects, Rail subscription (no duplicates, items apply instantly)
-- **Admin Dashboard** — overview stats, user management, ban/unban, badge grants, moderation logs, server management
-- **Email optional** — works with or without SMTP; when disabled, tokens print to the server console
+This README explains how to get the project running locally, with Docker, and notes for production.
 
 ---
 
-## Quick Start
+## Requirements
 
-### 1. Extract and install
+- Node.js 18+ (recommended)
+- PostgreSQL 13+ (13, 14, 15, 16, 17, 18 all work)
+- npm (comes with Node.js)
+- Optional: Docker (for running Postgres locally)
 
-```bash
-tar -xzf sigma-chat.tar.gz
-cd sigma-chat
-npm install
-```
+## Quickstart — Windows / macOS / Linux (local)
 
-### 2. Set up PostgreSQL
-
-Create a database, then run the schema:
+1. Clone the repository
 
 ```bash
-psql -d your_database -f db/schema.sql
+git clone https://github.com/rautastt/sturdy-dollop.git
+cd sturdy-dollop
 ```
 
-### 3. Configure environment
+2. Create and edit `.env`
+
+If you don't have a `.env` file, copy the example then edit it:
 
 ```bash
 cp .env.example .env
+# Edit .env: set DATABASE_URL, SESSION_SECRET, SMTP_* etc.
 ```
 
-Edit `.env` and set at minimum:
-- `DATABASE_URL` — your PostgreSQL connection string
-- `SESSION_SECRET` — any long random string
+Minimum values you should set in `.env`:
 
-**Email is disabled by default** (`EMAIL_ENABLED=false`). With email disabled:
-- New accounts are auto-verified instantly
-- Password reset links print to the server console instead of being emailed
-- You can enable email by setting `EMAIL_ENABLED=true` and filling in the SMTP fields
+- `DATABASE_URL` — Postgres connection string, e.g. `postgresql://sigma:secret@localhost:5432/sigmadb`
+- `SESSION_SECRET` — a long random string for session signing
+- `PORT` — optional, default 3000
+- `NODE_ENV` — `development` or `production`
 
-### 4. Seed the admin account
+3. Install dependencies
 
 ```bash
-node seed-admin.js
+npm ci
 ```
 
-This creates (or updates) the admin account:
-- **Username:** `Admin`
-- **Password:** `whatthesigma`
+If `npm ci` fails (for example because package-lock.json is missing), run `npm install`.
 
-### 5. Run
+4. Ensure uploads folder exists
 
 ```bash
-npm start
-# or for development with auto-restart:
-npm run dev   # requires: npm install -g nodemon
+mkdir -p public/uploads
 ```
 
-Open http://localhost:3000
+5. Create the database schema and seed admin
+
+```bash
+node setup-db.js   # applies db/schema.sql and creates an Admin user
+node seed-admin.js # optional: may create/update admin credentials
+```
+
+- `setup-db.js` runs `db/schema.sql` and seeds an admin user (default password in the script: `whatthesigma`). Change it after logging in.
+
+6. Start the server
+
+```bash
+node server.js
+# or run the start.bat on Windows if you've added it
+```
+
+Open http://localhost:3000 (or your configured PORT).
 
 ---
 
-## Admin Dashboard
+## Quickstart — Docker (Postgres 18 + local app)
 
-Log in as Admin and click the 🛡 button at the bottom of the sidebar.
+Run Postgres 18 locally with Docker:
 
-| Tab | What you can do |
-|-----|----------------|
-| Overview | Live stats — users, servers, messages, active bans |
-| Users | Search users, ban/unban, grant/remove badges, adjust points |
-| Bans | View all active bans, unban from here |
-| Mod Logs | Full audit trail of every moderation action |
-| Servers | List all servers with member/channel counts, delete any server |
+```bash
+docker run --name sigma-pg -e POSTGRES_PASSWORD=secret -e POSTGRES_USER=sigma -e POSTGRES_DB=sigmadb -p 5432:5432 -d postgres:18
+```
 
----
-
-## Store Items
-
-All items have unique IDs — no duplicates. Items take effect immediately on purchase.
-
-| Item | Cost | Effect |
-|------|------|--------|
-| Rail Subscription | 1000 pts | Grants 🚆 badge |
-| Gold/Cyan/Pink/Green/Red Name | 150 pts each | Changes username color in chat |
-| Midnight Theme | 200 pts | Deep blue UI theme |
-| Sunset Theme | 200 pts | Warm orange UI theme |
-| Sparkle Effect | 500 pts | Messages shimmer |
-| Confetti Effect | 500 pts | Confetti animation on messages |
-
----
-
-## Deploying to Render
-
-1. Push code to a GitHub repo
-2. Create a **PostgreSQL** database on Render, copy the Internal URL
-3. Create a **Web Service** pointing to your repo
-   - Build: `npm install`
-   - Start: `node server.js`
-4. Add environment variables (see `.env.example`)
-5. In the Render shell, run: `node seed-admin.js`
-
-> Free tier services sleep after 15 min of inactivity. Upgrade to $7/mo to keep it always on.
-
----
-
-## File Structure
+Then set in `.env`:
 
 ```
-sigma-chat/
-├── config/         database.js, email.js
-├── db/             schema.sql
-├── middleware/     auth.js, rateLimit.js
-├── public/         HTML pages, CSS, JS (served statically)
-│   ├── css/        app.css
-│   ├── js/         app.js
-│   └── uploads/    user-uploaded files (auto-created)
-├── routes/         auth, users, servers, messages, dms, friends, store, admin, notifications
-├── socket/         handlers.js (Socket.IO events)
-├── utils/          nanoid.js
-├── .env.example
-├── package.json
-├── seed-admin.js
-└── server.js
+DATABASE_URL=postgresql://sigma:secret@localhost:5432/sigmadb
 ```
+
+Then run the local app as above (npm ci, node setup-db.js, node server.js).
+
+Optional docker-compose (development): create `docker-compose.yml` in the repo root:
+
+```yaml
+version: '3.8'
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: sigma
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: sigmadb
+    ports:
+      - '5432:5432'
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  app:
+    image: node:18
+    working_dir: /usr/src/app
+    volumes:
+      - ./:/usr/src/app
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://sigma:secret@db:5432/sigmadb
+    ports:
+      - '3000:3000'
+    command: bash -lc "npm ci && node setup-db.js && node seed-admin.js && node server.js"
+
+volumes:
+  db_data:
+```
+
+Note: for production build a proper app image rather than bind-mounting source.
+
+---
+
+## Environment variables (important ones)
+
+See `.env.example` for the full list. Key variables:
+
+- DATABASE_URL — Postgres connection string
+- SESSION_SECRET — required for session cookies
+- PORT — server port (default 3000)
+- NODE_ENV — `development` or `production` (affects cookie security and DB ssl handling)
+- BASE_URL — used in emails/links
+- EMAIL_* / SMTP_* — SMTP host/port/user/pass if you enable email
+- UPLOAD_DIR — default `./public/uploads`
+
+## Database notes
+
+- Schema: `db/schema.sql` creates tables and indexes. It uses JSONB and ON CONFLICT (UPSERT). Postgres >= 9.5 supports required features; recommended >= 13.
+- `setup-db.js` runs the schema and inserts an admin account. If you prefer to run SQL manually: `psql -d your_db -f db/schema.sql`.
+- Sessions: the `session` table used by `connect-pg-simple` is created in the schema. `server.js` has `createTableIfMissing: false`, so ensure the table exists.
+
+## Production considerations
+
+- Use Node 18+ and a process manager (pm2, systemd, or container orchestrator).
+- Set `NODE_ENV=production` and a strong `SESSION_SECRET`.
+- For cloud Postgres that requires SSL you may need to adjust `config/database.js`. By default the code sets `ssl: { rejectUnauthorized: false }` when not running against localhost.
+- Use HTTPS behind a reverse proxy (nginx) and set `trust proxy` appropriately. `server.js` currently uses `app.set('trust proxy', 1)` which is for a single proxy.
+- Store uploads on durable storage and secure them.
+
+## Troubleshooting
+
+- DB connection errors: verify `DATABASE_URL`, DB reachable, correct SSL options.
+- Missing session cookies in production: ensure HTTPS (secure cookies) or set NODE_ENV=development for testing.
+- Schema errors: check you're connected to the intended DB before running `setup-db.js`.
+
+## Useful commands
+
+- Install deps: `npm ci`
+- Re-run DB setup: `node setup-db.js`
+- Create/update admin: `node seed-admin.js`
+- Start server: `node server.js`
+
+---
+
+If you want, I can:
+- Commit this updated README to the repository (I just did).
+- Add a Dockerfile for the app and a polished `docker-compose.yml` for production.
+- Add start scripts for PowerShell / Linux.
+
